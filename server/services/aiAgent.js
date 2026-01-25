@@ -32,6 +32,49 @@ function formatMenuForAI(menuItems) {
   }));
 }
 
+// Detect user intent from query
+async function detectIntent(query, conversationHistory = []) {
+  try {
+    const intentPrompt = `Analyze the user's message and determine their intent. Return ONLY a JSON object with this structure:
+{
+  "intent": "menu_inquiry" | "item_inquiry" | "order_item" | "confirm_order" | "general_question" | "order_status",
+  "confidence": 0.0-1.0
+}
+
+Intent meanings:
+- "menu_inquiry": User wants to know what's on the menu
+- "item_inquiry": User wants details about a specific item (ingredients, spice level, price)
+- "order_item": User wants to add an item to their order
+- "confirm_order": User wants to confirm/place their order (says "yes", "confirm", "place order", etc.)
+- "order_status": User wants to know their order ID or order status
+- "general_question": General questions about the restaurant
+
+User message: "${query}"
+
+Return ONLY valid JSON, no other text.`;
+
+    const messages = [
+      { role: 'system', content: intentPrompt },
+      ...conversationHistory.slice(-3), // Last 3 messages for context
+      { role: 'user', content: query }
+    ];
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4-turbo-preview',
+      messages: messages,
+      temperature: 0.3,
+      max_tokens: 100,
+      response_format: { type: 'json_object' }
+    });
+
+    const intentData = JSON.parse(completion.choices[0].message.content);
+    return intentData.intent || 'general_question';
+  } catch (error) {
+    console.error('Intent detection error:', error);
+    return 'general_question';
+  }
+}
+
 // AI Agent function to handle customer queries
 async function handleCustomerQuery(query, conversationHistory = []) {
   try {
@@ -40,14 +83,15 @@ async function handleCustomerQuery(query, conversationHistory = []) {
 
     const systemPrompt = `You are a friendly restaurant staff member taking phone orders. Be natural, concise, and human-like. 
 
-IMPORTANT RULES:
+CRITICAL RULES:
 1. When asked about the menu, mention 3-4 popular items briefly, then ask what they'd like. DON'T list all items.
 2. Speak naturally - like a real person, not a robot reading a list.
 3. Keep responses SHORT and conversational (2-3 sentences max).
 4. When customer mentions an item, confirm it and ask if they want anything else.
-5. When customer says they don't want anything else, ask: "Just to confirm, you want to place the order for [items], correct?" 
-6. DO NOT say the order is confirmed or give an order ID until the customer says "yes" to your confirmation question.
-7. Wait for explicit confirmation before saying the order is placed.
+5. When customer says they don't want anything else, ask: "Just to confirm, you want to place the order for [items], correct?"
+6. NEVER say "order confirmed" or give an order ID unless you are explicitly told the order was saved to the database.
+7. If customer asks for order ID before order is placed, say: "Your order hasn't been confirmed yet. Would you like to confirm your order?"
+8. Wait for explicit confirmation before proceeding to order placement.
 
 Menu Items:
 ${JSON.stringify(formattedMenu, null, 2)}
@@ -63,7 +107,7 @@ Spice Level Guide:
 Example responses:
 - "What's on the menu?" → "We have Butter Chicken, Chicken Biryani, Paneer Tikka, and Dal Makhani. What would you like?"
 - "I want vegetable samosa" → "Got it, one Vegetable Samosa. Anything else?"
-- "Confirm order" → "Perfect! Your order is confirmed. Your order ID is..."
+- "Yes" (to confirmation) → "Perfect! Let me process your order..." (DO NOT say confirmed yet)
 
 Be friendly, brief, and natural.`;
 
@@ -231,5 +275,6 @@ Return ONLY valid JSON, no other text.`;
 module.exports = {
   handleCustomerQuery,
   extractOrderFromConversation,
-  getMenuContext
+  getMenuContext,
+  detectIntent
 };

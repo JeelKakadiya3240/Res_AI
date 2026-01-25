@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
-const { handleCustomerQuery, extractOrderFromConversation } = require('../services/aiAgent');
+const { handleCustomerQuery, extractOrderFromConversation, detectIntent } = require('../services/aiAgent');
 require('dotenv').config();
 
 // Optional Twilio setup - only initialize if credentials are provided
@@ -365,8 +365,15 @@ router.post('/handle-speech', async (req, res) => {
       // Continue normal conversation (NOT an order confirmation)
       const aiResponse = await handleCustomerQuery(speechResult, conversationHistory);
       
+      // Create response object with intent
+      const aiResponseWithIntent = {
+        role: 'assistant',
+        content: aiResponse,
+        intent: userIntent
+      };
+      
       // Add AI response to history
-      conversationHistory.push({ role: 'assistant', content: aiResponse });
+      conversationHistory.push(aiResponseWithIntent);
       
       // Save AI response to DB
       if (conv) {
