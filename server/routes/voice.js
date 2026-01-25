@@ -155,23 +155,7 @@ router.post('/handle-speech', async (req, res) => {
   }
 
   try {
-    // Get AI response
-    const aiResponse = await handleCustomerQuery(speechResult, conversationHistory);
-    
-    // Add AI response to history
-    conversationHistory.push({ role: 'assistant', content: aiResponse });
-    
-    // Save AI response to DB
-    if (conv) {
-      await saveMessageToDB(conv.id, 'assistant', aiResponse);
-    }
-    
-    // Update conversation data in DB
-    await saveConversationToDB(callSid, {
-      conversation_data: { messages: conversationHistory }
-    });
-
-    // Check if user wants to place/confirm an order (improved detection)
+    // Check if user wants to place/confirm an order FIRST (before generating AI response)
     const lowerResponse = speechResult.toLowerCase().trim();
     
     // Handle phrases like "No confirm" or "No, confirm" - these mean "No (nothing else), confirm (the order)"
@@ -359,15 +343,41 @@ router.post('/handle-speech', async (req, res) => {
           conversations.delete(callSid);
         }
       } else {
-        twiml.say('I couldn\'t extract your order details. Could you please tell me what you would like to order?');
+        console.error('❌ Order extraction failed - no items found');
+        const errorMessage = 'I couldn\'t extract your order details. Could you please tell me what you would like to order?';
+        conversationHistory.push({ role: 'assistant', content: errorMessage });
+        
+        if (conv) {
+          await saveMessageToDB(conv.id, 'assistant', errorMessage);
+        }
+        
+        twiml.say(errorMessage);
         twiml.gather({
           input: 'speech',
           action: '/api/voice/handle-speech',
           method: 'POST',
           speechTimeout: 'auto'
         });
+        res.type('text/xml');
+        return res.send(twiml.toString());
       }
     } else {
+      // Continue normal conversation (NOT an order confirmation)
+      const aiResponse = await handleCustomerQuery(speechResult, conversationHistory);
+      
+      // Add AI response to history
+      conversationHistory.push({ role: 'assistant', content: aiResponse });
+      
+      // Save AI response to DB
+      if (conv) {
+        await saveMessageToDB(conv.id, 'assistant', aiResponse);
+      }
+      
+      // Update conversation data in DB
+      await saveConversationToDB(callSid, {
+        conversation_data: { messages: conversationHistory }
+      });
+      
       // Continue conversation
       twiml.say(aiResponse);
       twiml.gather({
