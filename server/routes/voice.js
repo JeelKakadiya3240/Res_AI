@@ -318,8 +318,18 @@ router.post('/handle-speech', async (req, res) => {
           const orderIdSpoken = order.order_id.split('').join(' ');
           const confirmationMessage = `Great! Your order has been confirmed. Your order ID is ${orderIdSpoken}. The total amount is ${totalAmount.toFixed(2)} dollars. Thank you for your order!`;
           
-          // Update AI response to include order confirmation
-          conversationHistory[conversationHistory.length - 1].content = confirmationMessage;
+          // Create confirmation message with intent and order info
+          const confirmationMessageWithIntent = {
+            role: 'assistant',
+            content: confirmationMessage,
+            intent: 'order_placed',
+            order_id: order.order_id,
+            order_created: true,
+            total_amount: totalAmount.toFixed(2)
+          };
+          
+          // Add confirmation message to conversation history
+          conversationHistory.push(confirmationMessageWithIntent);
           
           twiml.say(confirmationMessage);
           
