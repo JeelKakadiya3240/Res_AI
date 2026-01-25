@@ -211,7 +211,7 @@ router.post('/incoming-call', async (req, res) => {
   const twiml = new twilio.twiml.VoiceResponse();
   
   // Use natural human-like voice
-  sayNatural(twiml, 'Welcome to our restaurant. How can I help you today?');
+  sayNatural(twiml, 'I am an AI assistant of the restaurant. Tell me what you would like to order.');
   twiml.gather({
     input: 'speech',
     action: '/api/voice/handle-speech',
