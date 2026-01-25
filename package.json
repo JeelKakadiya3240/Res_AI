@@ -1,0 +1,29 @@
+{
+  "name": "restaurant-ai-agent",
+  "version": "1.0.0",
+  "description": "AI-powered customer care service for restaurant with voice ordering and admin dashboard",
+  "main": "server/index.js",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:dashboard\"",
+    "dev:server": "nodemon server/index.js",
+    "dev:dashboard": "cd dashboard && npm run dev",
+    "install:all": "npm install && cd dashboard && npm install",
+    "build": "cd dashboard && npm run build"
+  },
+  "keywords": ["ai", "restaurant", "voice", "supabase"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "@supabase/supabase-js": "^2.38.4",
+    "twilio": "^4.19.0",
+    "openai": "^4.20.1",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2",
+    "concurrently": "^8.2.2"
+  }
+}
