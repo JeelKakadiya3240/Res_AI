@@ -305,17 +305,23 @@ router.post('/handle-speech', async (req, res) => {
     // Get cart state
     const cart = getCart(callSid);
     
-    // Only say "Let me check" for intents that require actual processing (menu lookup, AI response, etc.)
-    // Skip for simple state transitions that don't need processing:
+    // Only say "Let me check" for intents that require SLOW processing (GPT-4 AI response)
+    // Skip for fast paths (menu lookup, state transitions, etc.):
     const cartItems = getCartItemsForOrder(callSid);
     const shouldSkipLetMeCheck = 
+      (userIntent === 'order_item') || // Fast menu lookup (~200ms) - no need to say "Let me check"
+      (userIntent === 'menu_inquiry') || // Fast path - direct category listing
+      (userIntent === 'item_inquiry') || // Fast path - direct menu lookup
+      (userIntent === 'category_inquiry') || // Fast path - category items lookup
       (userIntent === 'general_question' && cart.status === CartStatus.ADDING_ITEMS) || // "No" to "Anything else?" - just ask for name
       (userIntent === 'provide_info') || // Providing name/phone - just update state
       (userIntent === 'confirm_order' && cart.status === CartStatus.CONFIRMATION) || // "Yes" to "Is that correct?" - just create order
       (userIntent === 'confirm_order' && (!cartItems || cartItems.length === 0)); // "Yes" but cart is empty - just ask what to order
     
+    // Only say "Let me check" for intents that need GPT-4 AI processing (slow, ~850ms+)
+    // Fast paths (menu lookup, etc.) don't need it
     if (!shouldSkipLetMeCheck) {
-      // Say "Let me check" for intents that need processing (menu lookup, AI response, etc.)
+      // Say "Let me check" only for slow AI responses (general_question, angry_complaint, etc.)
       const immediateResponseStart = Date.now();
       sayNatural(twiml, 'Let me check that for you.');
       console.log(`⏱️  [PERF] "Let me check" said at: ${immediateResponseStart - overallStart}ms from request start`);
@@ -337,19 +343,103 @@ router.post('/handle-speech', async (req, res) => {
       }
       
       // Extract quantity and item name from user input
-      const qtyMatch = speechResult.match(/\b(one|1|two|2|three|3|four|4|five|5|\d+)\b/i);
-      const quantity = qtyMatch ? (parseInt(qtyMatch[1]) || (qtyMatch[1].toLowerCase().includes('one') ? 1 : 
-        qtyMatch[1].toLowerCase().includes('two') ? 2 : 
-        qtyMatch[1].toLowerCase().includes('three') ? 3 : 
-        qtyMatch[1].toLowerCase().includes('four') ? 4 : 
-        qtyMatch[1].toLowerCase().includes('five') ? 5 : 1)) : 1;
+      // Support both numeric (1, 2, 3) and word numbers (one, two, three, etc.)
+      // Also handle speech recognition errors (T00, TO, too → two)
+      const qtyMatch = speechResult.match(/\b(one|1|two|2|three|3|four|4|five|5|six|6|seven|7|eight|8|nine|9|ten|10|\d+|t00|to|too|tree|for|fife)\b/i);
+      
+      // Normalize speech recognition errors to correct number words
+      const normalizeNumberWord = (text) => {
+        const normalized = text.toLowerCase().trim();
+        // Handle common speech recognition errors
+        const errorMap = {
+          't00': 'two',    // "T00" → "two"
+          'to': 'two',     // "TO" → "two" (when it's clearly a number, not preposition)
+          'too': 'two',    // "too" → "two" (homophone)
+          'tree': 'three', // "tree" → "three"
+          'for': 'four',   // "for" → "four" (homophone)
+          'fore': 'four',  // "fore" → "four"
+          'fife': 'five',  // "fife" → "five"
+          'ate': 'eight',  // "ate" → "eight" (homophone)
+          'ate': 'eight',  // "8" → "eight"
+        };
+        return errorMap[normalized] || normalized;
+      };
+      
+      // Convert word numbers to integers
+      const wordToNumber = {
+        'one': 1, '1': 1,
+        'two': 2, '2': 2,
+        'three': 3, '3': 3,
+        'four': 4, '4': 4,
+        'five': 5, '5': 5,
+        'six': 6, '6': 6,
+        'seven': 7, '7': 7,
+        'eight': 8, '8': 8,
+        'nine': 9, '9': 9,
+        'ten': 10, '10': 10
+      };
+      
+      let quantity = 1; // Default to 1 if no quantity specified
+      if (qtyMatch) {
+        let qtyText = qtyMatch[1].toLowerCase();
+        const originalQtyText = qtyText;
+        
+        // Normalize speech recognition errors
+        qtyText = normalizeNumberWord(qtyText);
+        
+        // Try to parse as integer first (handles "2", "10", etc.)
+        const parsedInt = parseInt(qtyText);
+        if (!isNaN(parsedInt) && qtyText.match(/^\d+$/)) {
+          quantity = parsedInt;
+        } else if (wordToNumber[qtyText]) {
+          // Use word-to-number mapping
+          quantity = wordToNumber[qtyText];
+        } else {
+          // If normalization didn't work, try original text
+          const originalParsed = parseInt(originalQtyText);
+          if (!isNaN(originalParsed)) {
+            quantity = originalParsed;
+          }
+        }
+        
+        console.log(`🔢 [QUANTITY] Extracted quantity: "${originalQtyText}" → normalized: "${qtyText}" → ${quantity}`);
+      } else {
+        // Try fuzzy matching for common speech errors that might not match the regex
+        // Only match unambiguous patterns: "T00" (clearly a speech error) or "too" (less ambiguous than "to")
+        // Check at the start of the sentence or after removing ordering phrases
+        const cleanedForFuzzy = speechResult
+          .replace(/\b(yes|yeah|yep|sure|okay|ok|please|can you|could you|will you|i want|i'd like|i would like|i need|i'll have|give me|get me|order|add|put)\s+/gi, '')
+          .trim();
+        
+        // Only match "t00" or "too" at the start (not "to" which is too ambiguous)
+        const fuzzyQtyMatch = cleanedForFuzzy.match(/^(t00|too)\s+/i);
+        if (fuzzyQtyMatch) {
+          const normalized = normalizeNumberWord(fuzzyQtyMatch[1]);
+          if (wordToNumber[normalized]) {
+            quantity = wordToNumber[normalized];
+            console.log(`🔢 [QUANTITY] Fuzzy matched: "${fuzzyQtyMatch[1]}" → normalized: "${normalized}" → ${quantity}`);
+          } else {
+            console.log(`🔢 [QUANTITY] No quantity found, defaulting to 1`);
+          }
+        } else {
+          console.log(`🔢 [QUANTITY] No quantity found, defaulting to 1`);
+        }
+      }
       
       // Remove quantity, correction phrases, and common ordering phrases from text to get item name
       // This fixes issues like "Yes, can you order 2 chocolate milkshake" → should extract "chocolate milkshake"
-      const itemText = speechResult
+      // Also handles speech recognition errors like "T00 chocolate" → "chocolate"
+      let itemText = speechResult
         .replace(/\b(no|not|wrong|that's not|that is not|i said|i meant|just)\s+/gi, '')
         .replace(/\b(yes|yeah|yep|sure|okay|ok|please|can you|could you|will you|i want|i'd like|i would like|i need|i'll have|give me|get me|order|add|put)\s+/gi, '')
-        .replace(/\b(one|1|two|2|three|3|four|4|five|5|\d+)\b/gi, '')
+        .trim();
+      
+      // Remove quantities - be careful with "to" (only remove if it's clearly a quantity at start)
+      // First remove unambiguous numbers and number words
+      itemText = itemText
+        .replace(/\b(one|1|two|2|three|3|four|4|five|5|six|6|seven|7|eight|8|nine|9|ten|10|\d+)\b/gi, '')
+        .replace(/^(t00|too)\s+/i, '') // Remove "t00" or "too" only at the start (clearly quantity indicators)
+        .replace(/\b(tree|for|fife)\b/gi, '') // Remove other unambiguous speech errors
         .replace(/^[^a-z]*/i, '') // Remove leading non-alphabetic chars
         .replace(/\s+/g, ' ') // Normalize multiple spaces
         .trim();
@@ -1067,8 +1157,8 @@ router.post('/handle-speech', async (req, res) => {
       });
       
     } else {
-      // Continue normal conversation (handles item_inquiry, angry_complaint, etc.)
-      // "Let me check" already said above, now generate the actual response
+      // Continue normal conversation (handles general_question, angry_complaint, etc. that need GPT-4)
+      // "Let me check" already said above for these slow AI responses, now generate the actual response
       const aiStart = Date.now();
       const aiResponse = await handleCustomerQuery(speechResult, conversationHistory);
       timings.ai_response = Date.now();
