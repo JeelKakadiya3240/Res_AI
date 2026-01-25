@@ -22,28 +22,29 @@ async function getMenuCategoriesResponse() {
  */
 async function getCategoryItemsResponse(categoryName) {
   // Normalize category name (handle variations)
+  // Note: Database uses singular forms: 'Beverage', 'Appetizer', 'Dessert'
   const categoryMap = {
-    'beverage': 'Beverages',
-    'beverages': 'Beverages',
-    'drink': 'Beverages',
-    'drinks': 'Beverages',
-    'soft drink': 'Beverages',
-    'soft drinks': 'Beverages',
-    'appetizer': 'Appetizers',
-    'appetizers': 'Appetizers',
-    'starter': 'Appetizers',
-    'starters': 'Appetizers',
+    'beverage': 'Beverage',
+    'beverages': 'Beverage',
+    'drink': 'Beverage',
+    'drinks': 'Beverage',
+    'soft drink': 'Beverage',
+    'soft drinks': 'Beverage',
+    'appetizer': 'Appetizer',
+    'appetizers': 'Appetizer',
+    'starter': 'Appetizer',
+    'starters': 'Appetizer',
     'main course': 'Main Course',
     'main': 'Main Course',
     'mains': 'Main Course',
     'entree': 'Main Course',
     'entrees': 'Main Course',
-    'dessert': 'Desserts',
-    'desserts': 'Desserts',
+    'dessert': 'Dessert',
+    'desserts': 'Dessert',
     'bread': 'Bread',
     'breads': 'Bread',
-    'side': 'Sides',
-    'sides': 'Sides'
+    'side': 'Appetizer',  // Sides are in Appetizer category
+    'sides': 'Appetizer'
   };
   
   const normalizedCategory = categoryMap[categoryName.toLowerCase()] || categoryName;
