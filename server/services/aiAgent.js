@@ -39,7 +39,7 @@ async function detectIntent(query, conversationHistory = []) {
 
 Return ONLY a JSON object with this structure:
 {
-  "intent": "menu_inquiry" | "item_inquiry" | "order_item" | "confirm_order" | "general_question" | "order_status",
+  "intent": "menu_inquiry" | "item_inquiry" | "order_item" | "confirm_order" | "provide_info" | "general_question" | "order_status",
   "confidence": 0.0-1.0
 }
 
@@ -47,6 +47,7 @@ Intent meanings:
 - "menu_inquiry": User wants to know what's on the menu (e.g., "what's on the menu", "show me menu")
 - "item_inquiry": User wants details about a specific item (ingredients, spice level, price)
 - "order_item": User wants to add an item to their order (e.g., "I want vegetable samosa", "order butter chicken", "vegetable samosa")
+- "provide_info": User is providing their name or phone number (e.g., "My name is John", "John Doe", "My number is 1234567890", "It's 555-1234")
 - "confirm_order": User wants to confirm/place their order. ONLY use this if:
   * AI just asked "Is that correct?" or "correct?" AND user says "yes", "correct", "right", "sure", "okay", "yeah"
   * AI just asked "So your order is: [items]. Is that correct?" AND user says "yes"

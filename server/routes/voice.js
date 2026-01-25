@@ -3,6 +3,7 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const { handleCustomerQuery, extractOrderFromConversation, detectIntent } = require('../services/aiAgent');
 const { lookupMenuItem, validateMenuItemById } = require('../services/menuLookup');
+const { extractCustomerInfo } = require('../services/customerInfoExtractor');
 const { 
   getCart, 
   addItemToCart, 
@@ -11,6 +12,9 @@ const {
   clearCart, 
   getCartItemsForOrder, 
   validateCartItems,
+  setCustomerInfo,
+  getCustomerInfo,
+  isCustomerInfoComplete,
   CartStatus 
 } = require('../services/cartState');
 require('dotenv').config();
@@ -313,14 +317,15 @@ router.post('/handle-speech', async (req, res) => {
       });
       
     } else if (userIntent === 'general_question' && cart.status === CartStatus.ADDING_ITEMS) {
-      // User said "No" to "Anything else?" - move to CONFIRMATION
+      // User said "No" to "Anything else?" - move to COLLECTING_INFO
       const summary = getCartSummary(callSid);
       
       if (summary && summary.items.length > 0) {
-        updateCartStatus(callSid, CartStatus.CONFIRMATION);
+        updateCartStatus(callSid, CartStatus.COLLECTING_INFO);
         
-        const response = `So your order is: ${summary.items_text}. Is that correct?`;
-        conversationHistory.push({ role: 'assistant', content: response, intent: 'order_summary' });
+        // Ask for name first
+        const response = 'Great! Before I confirm your order, may I have your name, please?';
+        conversationHistory.push({ role: 'assistant', content: response, intent: 'asking_name' });
         
         if (conv) {
           await saveMessageToDB(conv.id, 'assistant', response);
@@ -337,6 +342,85 @@ router.post('/handle-speech', async (req, res) => {
         // No items in cart - ask what they want
         const response = 'What would you like to order?';
         conversationHistory.push({ role: 'assistant', content: response });
+        
+        if (conv) {
+          await saveMessageToDB(conv.id, 'assistant', response);
+        }
+        
+        sayNatural(twiml, response);
+        twiml.gather({
+          input: 'speech',
+          action: '/api/voice/handle-speech',
+          method: 'POST',
+          speechTimeout: 'auto'
+        });
+      }
+      
+      await saveConversationToDB(callSid, {
+        conversation_data: { messages: conversationHistory }
+      });
+      
+    } else if (userIntent === 'provide_info' && cart.status === CartStatus.COLLECTING_INFO) {
+      // User is providing name or phone number
+      const customerInfo = getCustomerInfo(callSid);
+      
+      // Use AI to extract name and phone
+      const extracted = await extractCustomerInfo(speechResult);
+      
+      // Update customer info with extracted data
+      if (extracted.name) {
+        setCustomerInfo(callSid, extracted.name, customerInfo.phone);
+        customerInfo.name = extracted.name;
+      }
+      if (extracted.phone) {
+        setCustomerInfo(callSid, customerInfo.name, extracted.phone);
+        customerInfo.phone = extracted.phone;
+      }
+      
+      // Re-fetch to get updated info
+      const updatedInfo = getCustomerInfo(callSid);
+      console.log('📝 Updated customer info:', updatedInfo);
+      
+      // Check what we still need
+      if (!customerInfo.name) {
+        // Still need name
+        const response = 'I didn\'t catch your name. Could you please tell me your name?';
+        conversationHistory.push({ role: 'assistant', content: response, intent: 'asking_name' });
+        
+        if (conv) {
+          await saveMessageToDB(conv.id, 'assistant', response);
+        }
+        
+        sayNatural(twiml, response);
+        twiml.gather({
+          input: 'speech',
+          action: '/api/voice/handle-speech',
+          method: 'POST',
+          speechTimeout: 'auto'
+        });
+      } else if (!customerInfo.phone) {
+        // Have name, need phone
+        const response = `Thank you, ${customerInfo.name}. What's your phone number?`;
+        conversationHistory.push({ role: 'assistant', content: response, intent: 'asking_phone' });
+        
+        if (conv) {
+          await saveMessageToDB(conv.id, 'assistant', response);
+        }
+        
+        sayNatural(twiml, response);
+        twiml.gather({
+          input: 'speech',
+          action: '/api/voice/handle-speech',
+          method: 'POST',
+          speechTimeout: 'auto'
+        });
+      } else {
+        // Have both - move to confirmation
+        const summary = getCartSummary(callSid);
+        updateCartStatus(callSid, CartStatus.CONFIRMATION);
+        
+        const response = `Perfect! So your order is: ${summary.items_text}. Is that correct?`;
+        conversationHistory.push({ role: 'assistant', content: response, intent: 'order_summary' });
         
         if (conv) {
           await saveMessageToDB(conv.id, 'assistant', response);
@@ -444,18 +528,21 @@ router.post('/handle-speech', async (req, res) => {
         cart_items: cartItems
       });
       
-      const { data: order, error: orderError } = await supabase
-        .from('orders')
-        .insert({
-          order_id: orderId,
-          customer_name: 'Guest',
-          customer_phone: req.body.From || null,
-          items: orderItems,
-          total_amount: totalAmount.toFixed(2),
-          status: 'pending'
-        })
-        .select()
-        .single();
+        // Get customer info from cart
+        const customerInfo = getCustomerInfo(callSid);
+        
+        const { data: order, error: orderError } = await supabase
+          .from('orders')
+          .insert({
+            order_id: orderId,
+            customer_name: customerInfo.name || 'Guest',
+            customer_phone: customerInfo.phone || req.body.From || null,
+            items: orderItems,
+            total_amount: totalAmount.toFixed(2),
+            status: 'pending'
+          })
+          .select()
+          .single();
       
       if (orderError || !order) {
         console.error('❌ Order creation error:', orderError);

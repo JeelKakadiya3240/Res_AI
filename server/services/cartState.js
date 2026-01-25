@@ -21,7 +21,9 @@ const carts = new Map();
  *       matched_at: "2026-01-24T08:12:34Z"
  *     }
  *   ],
- *   status: "ADDING_ITEMS" | "AWAITING_MORE" | "CONFIRMATION" | "PLACING_ORDER",
+ *   customer_name: "John Doe" | null,
+ *   customer_phone: "+1234567890" | null,
+ *   status: "ADDING_ITEMS" | "AWAITING_MORE" | "COLLECTING_INFO" | "CONFIRMATION" | "PLACING_ORDER",
  *   created_at: "2026-01-24T08:12:34Z",
  *   updated_at: "2026-01-24T08:12:34Z"
  * }
@@ -31,6 +33,7 @@ const CartStatus = {
   EMPTY: 'EMPTY',
   ADDING_ITEMS: 'ADDING_ITEMS',
   AWAITING_MORE: 'AWAITING_MORE',
+  COLLECTING_INFO: 'COLLECTING_INFO',
   CONFIRMATION: 'CONFIRMATION',
   PLACING_ORDER: 'PLACING_ORDER'
 };
@@ -42,6 +45,8 @@ function getCart(callSid) {
   if (!carts.has(callSid)) {
     carts.set(callSid, {
       items: [],
+      customer_name: null,
+      customer_phone: null,
       status: CartStatus.EMPTY,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
@@ -135,6 +140,42 @@ function getCartItemsForOrder(callSid) {
 }
 
 /**
+ * Set customer information
+ */
+function setCustomerInfo(callSid, name, phone) {
+  const cart = getCart(callSid);
+  if (name) {
+    cart.customer_name = name;
+    console.log(`👤 Customer name set: ${name}`);
+  }
+  if (phone) {
+    cart.customer_phone = phone;
+    console.log(`📱 Customer phone set: ${phone}`);
+  }
+  cart.updated_at = new Date().toISOString();
+  return cart;
+}
+
+/**
+ * Get customer information
+ */
+function getCustomerInfo(callSid) {
+  const cart = getCart(callSid);
+  return {
+    name: cart.customer_name,
+    phone: cart.customer_phone
+  };
+}
+
+/**
+ * Check if customer info is complete
+ */
+function isCustomerInfoComplete(callSid) {
+  const cart = getCart(callSid);
+  return cart.customer_name && cart.customer_phone;
+}
+
+/**
  * Validate all items in cart (for final placement)
  */
 async function validateCartItems(callSid, validateMenuItemById) {
@@ -160,5 +201,8 @@ module.exports = {
   clearCart,
   getCartItemsForOrder,
   validateCartItems,
+  setCustomerInfo,
+  getCustomerInfo,
+  isCustomerInfoComplete,
   CartStatus
 };
