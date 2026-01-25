@@ -1,20 +1,27 @@
 const Fuse = require('fuse.js');
 const supabase = require('../config/supabase');
 
-// Synonym/alias table for common typos and variations
+// Synonym/alias table for common typos and variations (American food items)
 const MENU_SYNONYMS = {
-  'samosa': ['samosa', 'simosa', 'samosaa', 'samos', 'veg samosa', 'vegetable samosa', 'veg. samosa'],
-  'biryani': ['biryani', 'biriyani', 'biriani', 'biryani rice'],
-  'butter chicken': ['butter chicken', 'butterchicken', 'butter chicken curry'],
-  'paneer tikka': ['paneer tikka', 'paneer-tikka', 'paneer tikka masala', 'paneer tika'],
-  'dal makhani': ['dal makhani', 'dal makani', 'dal makhni', 'black dal'],
-  'naan': ['naan', 'nan', 'naan bread', 'naan breads'],
-  'lassi': ['lassi', 'lasi', 'mango lassi', 'yogurt drink'],
-  'tikka masala': ['tikka masala', 'tika masala', 'tikka masla'],
-  'palak paneer': ['palak paneer', 'palak panner', 'spinach paneer'],
-  'tandoori chicken': ['tandoori chicken', 'tandoor chicken', 'tandori chicken'],
-  'gulab jamun': ['gulab jamun', 'gulab jamoon', 'gulabjamun', 'jamun'],
-  'vindaloo': ['vindaloo', 'vindalou', 'vindaloo curry']
+  'burger': ['burger', 'hamburger', 'hamburgers', 'cheeseburger', 'cheeseburgers', 'burgers', 'beef burger'],
+  'pizza': ['pizza', 'pizzas', 'pepperoni pizza', 'cheese pizza', 'margherita pizza'],
+  'hot dog': ['hot dog', 'hotdog', 'hotdogs', 'frankfurter', 'frank', 'wiener'],
+  'french fries': ['french fries', 'fries', 'french fry', 'fried potatoes', 'chips'],
+  'chicken wings': ['chicken wings', 'wings', 'buffalo wings', 'chicken wing', 'hot wings'],
+  'mac and cheese': ['mac and cheese', 'macaroni and cheese', 'mac n cheese', 'macaroni', 'mac cheese'],
+  'bbq ribs': ['bbq ribs', 'ribs', 'barbecue ribs', 'bbq rib', 'pork ribs'],
+  'fried chicken': ['fried chicken', 'chicken', 'fried chick', 'crispy chicken', 'southern fried chicken'],
+  'caesar salad': ['caesar salad', 'caesar', 'cesar salad', 'caeser salad'],
+  'club sandwich': ['club sandwich', 'club', 'club sandwhich', 'triple decker'],
+  'blt': ['blt', 'b l t', 'bacon lettuce tomato', 'bacon lettuce and tomato'],
+  'tacos': ['tacos', 'taco', 'hard shell tacos', 'soft shell tacos'],
+  'burrito': ['burrito', 'burritos', 'burito', 'burittos'],
+  'nachos': ['nachos', 'nacho', 'nachos chips', 'loaded nachos'],
+  'onion rings': ['onion rings', 'onion ring', 'fried onions', 'onion rings'],
+  'milkshake': ['milkshake', 'milkshakes', 'shake', 'shakes', 'milk shake'],
+  'apple pie': ['apple pie', 'apple pies', 'pie', 'apple pye'],
+  'chocolate cake': ['chocolate cake', 'choclate cake', 'chocolate', 'choc cake'],
+  'ice cream': ['ice cream', 'icecream', 'ice creams', 'gelato', 'frozen dessert']
 };
 
 // Confidence thresholds

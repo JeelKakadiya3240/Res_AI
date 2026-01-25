@@ -94,10 +94,12 @@ async function saveMessageToDB(conversationId, role, content) {
 function formatNaturalSpeech(text) {
   // Add natural pauses after punctuation for more human-like rhythm
   let formatted = text
-    .replace(/\. /g, '. <break time="300ms"/>')
-    .replace(/\? /g, '? <break time="400ms"/>')
-    .replace(/! /g, '! <break time="300ms"/>')
-    .replace(/, /g, ', <break time="200ms"/>');
+    .replace(/\.\.\./g, '<break time="500ms"/>') // Longer pause for ellipsis
+    .replace(/\. /g, '. <break time="400ms"/>') // Longer pause after sentences
+    .replace(/\? /g, '? <break time="500ms"/>') // Longer pause after questions
+    .replace(/! /g, '! <break time="400ms"/>') // Pause after exclamations
+    .replace(/, /g, ', <break time="300ms"/>') // Pause after commas
+    .replace(/\. /g, '. <break time="400ms"/>'); // Ensure sentence pauses
   
   // Wrap in SSML with prosody for natural speech (rate and pitch adjustments)
   return `<speak>
@@ -151,7 +153,9 @@ router.post('/incoming-call', async (req, res) => {
     action: '/api/voice/handle-speech',
     method: 'POST',
     speechTimeout: 'auto',
-    language: 'en-US'
+    language: 'en-US',
+    bargeIn: true, // Allow interruption while AI is speaking
+    bargeInOnSpeech: true // Detect speech and interrupt
   });
 
   res.type('text/xml');
@@ -273,7 +277,9 @@ router.post('/handle-speech', async (req, res) => {
           input: 'speech',
           action: '/api/voice/handle-speech',
           method: 'POST',
-          speechTimeout: 'auto'
+          speechTimeout: 'auto',
+          bargeIn: true,
+          bargeInOnSpeech: true
         });
       } else if (lookupResult.action === 'ask_clarification') {
         // Ambiguous - ask for clarification
@@ -290,7 +296,9 @@ router.post('/handle-speech', async (req, res) => {
           input: 'speech',
           action: '/api/voice/handle-speech',
           method: 'POST',
-          speechTimeout: 'auto'
+          speechTimeout: 'auto',
+          bargeIn: true,
+          bargeInOnSpeech: true
         });
       } else {
         // Low confidence - show menu or ask
@@ -307,7 +315,9 @@ router.post('/handle-speech', async (req, res) => {
           input: 'speech',
           action: '/api/voice/handle-speech',
           method: 'POST',
-          speechTimeout: 'auto'
+          speechTimeout: 'auto',
+          bargeIn: true,
+          bargeInOnSpeech: true
         });
       }
       
@@ -336,7 +346,9 @@ router.post('/handle-speech', async (req, res) => {
           input: 'speech',
           action: '/api/voice/handle-speech',
           method: 'POST',
-          speechTimeout: 'auto'
+          speechTimeout: 'auto',
+          bargeIn: true,
+          bargeInOnSpeech: true
         });
       } else {
         // No items in cart - ask what they want
@@ -352,7 +364,9 @@ router.post('/handle-speech', async (req, res) => {
           input: 'speech',
           action: '/api/voice/handle-speech',
           method: 'POST',
-          speechTimeout: 'auto'
+          speechTimeout: 'auto',
+          bargeIn: true,
+          bargeInOnSpeech: true
         });
       }
       
@@ -396,7 +410,9 @@ router.post('/handle-speech', async (req, res) => {
           input: 'speech',
           action: '/api/voice/handle-speech',
           method: 'POST',
-          speechTimeout: 'auto'
+          speechTimeout: 'auto',
+          bargeIn: true,
+          bargeInOnSpeech: true
         });
       } else if (!updatedInfo.phone) {
         // Have name, need phone
@@ -412,7 +428,9 @@ router.post('/handle-speech', async (req, res) => {
           input: 'speech',
           action: '/api/voice/handle-speech',
           method: 'POST',
-          speechTimeout: 'auto'
+          speechTimeout: 'auto',
+          bargeIn: true,
+          bargeInOnSpeech: true
         });
       } else {
         // Have both - move to confirmation
@@ -431,7 +449,9 @@ router.post('/handle-speech', async (req, res) => {
           input: 'speech',
           action: '/api/voice/handle-speech',
           method: 'POST',
-          speechTimeout: 'auto'
+          speechTimeout: 'auto',
+          bargeIn: true,
+          bargeInOnSpeech: true
         });
       }
       
@@ -462,7 +482,9 @@ router.post('/handle-speech', async (req, res) => {
           input: 'speech',
           action: '/api/voice/handle-speech',
           method: 'POST',
-          speechTimeout: 'auto'
+          speechTimeout: 'auto',
+          bargeIn: true,
+          bargeInOnSpeech: true
         });
         res.type('text/xml');
         return res.send(twiml.toString());
@@ -494,7 +516,9 @@ router.post('/handle-speech', async (req, res) => {
           input: 'speech',
           action: '/api/voice/handle-speech',
           method: 'POST',
-          speechTimeout: 'auto'
+          speechTimeout: 'auto',
+          bargeIn: true,
+          bargeInOnSpeech: true
         });
         res.type('text/xml');
         return res.send(twiml.toString());

@@ -1,5 +1,6 @@
 const OpenAI = require('openai');
 const supabase = require('../config/supabase');
+const { getMenuCategories, getMenuItemsByCategory, formatCategoriesForAI, formatMenuByCategoryForAI } = require('./menuCategories');
 require('dotenv').config();
 
 const openai = new OpenAI({
@@ -39,12 +40,13 @@ async function detectIntent(query, conversationHistory = []) {
 
 Return ONLY a JSON object with this structure:
 {
-  "intent": "menu_inquiry" | "item_inquiry" | "order_item" | "confirm_order" | "provide_info" | "general_question" | "order_status",
+  "intent": "menu_inquiry" | "category_inquiry" | "item_inquiry" | "order_item" | "confirm_order" | "provide_info" | "general_question" | "order_status" | "angry_complaint",
   "confidence": 0.0-1.0
 }
 
 Intent meanings:
-- "menu_inquiry": User wants to know what's on the menu (e.g., "what's on the menu", "show me menu")
+- "menu_inquiry": User wants to know what's on the menu (e.g., "what's on the menu", "show me menu", "what categories do you have")
+- "category_inquiry": User wants to know items in a specific category (e.g., "what do you have in beverages?", "what's in lunch?", "show me soft drinks")
 - "item_inquiry": User wants details about a specific item (ingredients, spice level, price)
 - "order_item": User wants to add an item to their order (e.g., "I want vegetable samosa", "order butter chicken", "vegetable samosa")
 - "provide_info": User is providing their name or phone number (e.g., "My name is John", "John Doe", "My number is 1234567890", "It's 555-1234")
@@ -54,6 +56,7 @@ Intent meanings:
   * User explicitly says "confirm order", "place order", "yes confirm"
   * DO NOT use for "No" when AI asks "Anything else?" - that's general_question
 - "order_status": User wants to know their order ID or order status (e.g., "what's my order ID")
+- "angry_complaint": User is angry, frustrated, or complaining (e.g., "this is terrible", "I'm so angry", "this is ridiculous", "I hate this")
 - "general_question": General questions, "No" to "Anything else?", or other responses
 
 CRITICAL RULES - ORDER FLOW:
@@ -96,8 +99,30 @@ async function handleCustomerQuery(query, conversationHistory = []) {
   try {
     const menuItems = await getMenuContext();
     const formattedMenu = formatMenuForAI(menuItems);
+    const categories = await getMenuCategories();
+    const categoriesText = formatCategoriesForAI(categories);
 
-    const systemPrompt = `You are a friendly restaurant staff member taking phone orders. Be natural, concise, and human-like. 
+    const systemPrompt = `You are a friendly, empathetic restaurant staff member taking phone orders. Be natural, concise, and human-like. ALWAYS listen and respond to interruptions - if customer speaks while you're explaining, STOP and address what they said.
+
+CRITICAL RULES - HANDLING ANGRY/FRUSTRATED CUSTOMERS:
+- If customer sounds angry, frustrated, or upset, respond with empathy FIRST
+- Say things like: "I completely understand your frustration. Don't worry, I'm here to help and I'll take care of this for you."
+- Acknowledge their feelings: "I'm sorry you're experiencing this. Let me help resolve this right away."
+- Be patient, calm, and solution-oriented
+- NEVER get defensive or dismissive
+- After acknowledging, ask: "What can I do to make this right for you?"
+
+CRITICAL RULES - INTERRUPTIONS:
+- If customer interrupts you while you're speaking, IMMEDIATELY stop and listen
+- Respond to what they just said, not what you were saying
+- Example: If you're listing menu items and they say "I want a burger", STOP listing and say "Got it, one burger. Anything else?"
+- Always prioritize customer's current input over your ongoing explanation
+
+CRITICAL RULES - MENU INQUIRIES:
+- When asked "What's on the menu?" or "What do you have?", list CATEGORIES only: "We have [list categories]. Which category would you like to see?"
+- When asked about a specific category (e.g., "What do you have in beverages?"), list items in THAT category only
+- Keep category lists SHORT - mention 3-4 items max, then ask if they want to see more
+- Add natural pauses between items: "We have burgers... [pause]... pizza... [pause]... and fries." 
 
 CRITICAL RULES - ORDER FLOW:
 1. When customer says "I want to order X" or "I want X" → This is ADDING to their order (cart), NOT confirming. Say: "Got it, [item]. Anything else?"
@@ -112,13 +137,20 @@ CONVERSATION FLOW:
 - Customer says "Yes" (to confirmation) → "Perfect! Let me process your order..." (system will confirm)
 
 OTHER RULES:
-- When asked about the menu, mention 3-4 popular items briefly, then ask what they'd like. DON'T list all items.
-- Speak naturally - like a real person, not a robot reading a list.
-- Keep responses SHORT and conversational (2-3 sentences max).
+- Speak naturally - like a real person, not a robot reading a list
+- Keep responses SHORT and conversational (2-3 sentences max)
+- Add natural pauses in your speech (use "..." to indicate pauses)
 - If customer asks for order ID before order is placed, say: "Your order hasn't been confirmed yet. Would you like to confirm your order?"
 
-Menu Items:
-${JSON.stringify(formattedMenu, null, 2)}
+Available Categories:
+${categoriesText}
+
+Menu Items (by category):
+${JSON.stringify(formattedMenu.reduce((acc, item) => {
+  if (!acc[item.category]) acc[item.category] = [];
+  acc[item.category].push(item);
+  return acc;
+}, {}), null, 2)}
 
 Spice Level Guide:
 - 0: No spice
@@ -129,12 +161,15 @@ Spice Level Guide:
 - 5: Very Hot
 
 Example responses:
-- "What's on the menu?" → "We have Butter Chicken, Chicken Biryani, Paneer Tikka, and Dal Makhani. What would you like?"
+- "What's on the menu?" → "We have Main Course, Appetizers, Beverages, Desserts, and Bread. Which category would you like to see?"
+- "What do you have in beverages?" → "In beverages, we have... [pause]... Cola, Lemonade, Iced Tea, and Coffee. Would you like to order any of these?"
+- "This is terrible!" → "I completely understand your frustration. Don't worry, I'm here to help. What can I do to make this right for you?"
+- "I want a burger" (while you're listing menu) → "Got it, one burger. Anything else?" (STOP listing, respond to their order)
 - "I want vegetable samosa" → "Got it, one Vegetable Samosa. Anything else?"
 - "No" (to "Anything else?") → "So your order is: one Vegetable Samosa. Is that correct?"
 - "Yes" (to confirmation) → "Perfect! Let me process your order..." (DO NOT say confirmed yet - system handles it)
 
-Be friendly, brief, and natural. Remember: ordering items = adding to cart, only "Yes" to confirmation = place order.`;
+Be friendly, brief, natural, and empathetic. Always listen for interruptions and respond immediately. Remember: ordering items = adding to cart, only "Yes" to confirmation = place order.`;
 
     const messages = [
       { role: 'system', content: systemPrompt },
