@@ -82,6 +82,20 @@ function addItemToCart(callSid, itemData) {
 }
 
 /**
+ * Remove last item from cart (for corrections)
+ */
+function removeLastItemFromCart(callSid) {
+  const cart = getCart(callSid);
+  if (cart.items.length > 0) {
+    const removed = cart.items.pop();
+    cart.updated_at = new Date().toISOString();
+    console.log(`🗑️ Removed from cart: ${removed.menu_name} (correction)`);
+    return removed;
+  }
+  return null;
+}
+
+/**
  * Get cart summary (for confirmation message)
  */
 function getCartSummary(callSid) {
@@ -196,6 +210,7 @@ async function validateCartItems(callSid, validateMenuItemById) {
 module.exports = {
   getCart,
   addItemToCart,
+  removeLastItemFromCart,
   getCartSummary,
   updateCartStatus,
   clearCart,

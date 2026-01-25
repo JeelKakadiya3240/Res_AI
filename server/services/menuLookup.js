@@ -121,7 +121,55 @@ async function lookupMenuItem(rawText, quantity = 1) {
     shouldSort: true
   });
 
-  // Search with normalized text
+  // First, check for exact or near-exact matches (highest priority)
+  const exactMatches = [];
+  const normalizedLower = normalized.toLowerCase();
+  
+  for (const menuItem of menuItems) {
+    const menuNameLower = menuItem.name.toLowerCase();
+    
+    // Exact match (case-insensitive)
+    if (menuNameLower === normalizedLower) {
+      exactMatches.push({
+        item: menuItem,
+        score: 0, // Perfect match
+        confidence: 1.0
+      });
+      continue;
+    }
+    
+    // Full phrase match - input is contained in menu name or vice versa
+    if (menuNameLower.includes(normalizedLower) || normalizedLower.includes(menuNameLower)) {
+      // Calculate how much of the input matches
+      const matchRatio = normalizedLower.length / Math.max(menuNameLower.length, normalizedLower.length);
+      if (matchRatio >= 0.7) { // At least 70% of input matches
+        exactMatches.push({
+          item: menuItem,
+          score: 1 - matchRatio, // Lower score = better match
+          confidence: matchRatio
+        });
+        continue;
+      }
+    }
+    
+    // Word-by-word exact match (e.g., "cheese burger" matches "Cheeseburger")
+    const menuWords = menuNameLower.split(/\s+/);
+    const inputWords = normalizedLower.split(/\s+/);
+    const matchingWords = inputWords.filter(iw => 
+      menuWords.some(mw => mw === iw || mw.includes(iw) || iw.includes(mw))
+    );
+    if (matchingWords.length === inputWords.length && inputWords.length > 0) {
+      // All input words match
+      const matchRatio = matchingWords.length / Math.max(menuWords.length, inputWords.length);
+      exactMatches.push({
+        item: menuItem,
+        score: 1 - matchRatio,
+        confidence: 0.9 + (matchRatio * 0.1) // Boost confidence for full word matches
+      });
+    }
+  }
+  
+  // Search with normalized text using Fuse.js
   const results = fuse.search(normalized);
   
   // Also check synonyms
@@ -133,14 +181,15 @@ async function lookupMenuItem(rawText, quantity = 1) {
     synonymResults.push(...synonymSearch);
   }
 
-  // Also try direct word matching for common typos
+  // Also try direct word matching for common typos (lower priority than exact matches)
   // Handle cases like "lemmon" -> "lemonade", "laminate" -> "lemonade"
   const directMatches = [];
   for (const menuItem of menuItems) {
     const menuNameLower = menuItem.name.toLowerCase();
-    const normalizedLower = normalized.toLowerCase();
     
-    // Check if key words match (e.g., "lemmon" contains "lemon")
+    // Skip if already in exact matches
+    if (exactMatches.some(em => em.item.id === menuItem.id)) continue;
+    
     const menuWords = menuNameLower.split(/\s+/);
     const inputWords = normalizedLower.split(/\s+/);
     
@@ -161,8 +210,8 @@ async function lookupMenuItem(rawText, quantity = 1) {
             if (similarity >= 0.5) { // At least 50% similar
               directMatches.push({
                 item: menuItem,
-                score: 1 - similarity, // Lower score = better match
-                confidence: similarity
+                score: 1 - similarity + 0.3, // Add penalty for partial matches (higher score = worse)
+                confidence: similarity * 0.8 // Reduce confidence for partial word matches
               });
               break;
             }
@@ -172,8 +221,8 @@ async function lookupMenuItem(rawText, quantity = 1) {
     }
   }
 
-  // Combine all results
-  const allResults = [...results, ...synonymResults, ...directMatches];
+  // Combine all results - prioritize exact matches first
+  const allResults = [...exactMatches, ...results, ...synonymResults, ...directMatches];
   const uniqueResults = [];
   const seenIds = new Set();
   

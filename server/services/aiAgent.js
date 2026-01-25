@@ -7,6 +7,24 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+// Menu context cache to avoid repeated database queries
+let menuContextCache = {
+  items: null,
+  categories: null,
+  lastUpdated: null,
+  ttl: 5 * 60 * 1000 // 5 minutes cache
+};
+
+// Clear cache function (useful for testing or manual refresh)
+function clearMenuCache() {
+  menuContextCache = {
+    items: null,
+    categories: null,
+    lastUpdated: null,
+    ttl: 5 * 60 * 1000
+  };
+}
+
 /**
  * Remove duplicate phrases from AI response
  * Prevents repetitive phrases like "let me know, let me know" or "okay, okay"
@@ -81,8 +99,20 @@ function removeDuplicatePhrases(text) {
   return cleaned.trim();
 }
 
-// Get menu items for context
+// Get menu items for context (with caching)
 async function getMenuContext() {
+  const now = Date.now();
+  
+  // Return cached data if still valid
+  if (menuContextCache.items && 
+      menuContextCache.lastUpdated && 
+      (now - menuContextCache.lastUpdated) < menuContextCache.ttl) {
+    console.log('📦 [CACHE] Using cached menu context');
+    return menuContextCache.items;
+  }
+  
+  // Cache expired or doesn't exist - fetch fresh data
+  console.log('📦 [CACHE] Fetching fresh menu context from database');
   const { data, error } = await supabase
     .from('menu_items')
     .select('name, description, ingredients, spice_level, price, category')
@@ -90,9 +120,14 @@ async function getMenuContext() {
 
   if (error) {
     console.error('Error fetching menu:', error);
-    return [];
+    return menuContextCache.items || []; // Return cached data if available, even if expired
   }
-  return data || [];
+  
+  // Update cache
+  menuContextCache.items = data || [];
+  menuContextCache.lastUpdated = now;
+  
+  return menuContextCache.items;
 }
 
 // Format menu items for AI context
@@ -109,6 +144,7 @@ function formatMenuForAI(menuItems) {
 
 // Detect user intent from query
 async function detectIntent(query, conversationHistory = []) {
+  const intentStart = Date.now();
   try {
     const intentPrompt = `Analyze the user's message and determine their intent. Consider the conversation context carefully.
 
@@ -121,13 +157,14 @@ Return ONLY a JSON object with this structure:
 Intent meanings:
 - "menu_inquiry": User wants to know what's on the menu (e.g., "what's on the menu", "show me menu", "what categories do you have")
 - "category_inquiry": User wants to know items in a specific category (e.g., "what do you have in beverages?", "what's in lunch?", "show me soft drinks")
-- "item_inquiry": User wants details about a specific item (ingredients, spice level, price)
-- "order_item": User wants to add an item to their order (e.g., "I want vegetable samosa", "order butter chicken", "vegetable samosa")
+- "item_inquiry": User is asking about a specific item - either checking if it exists (e.g., "do you have coffee?", "is coffee available?", "do you serve pizza?") OR asking for details about it (e.g., "what's in coffee?", "tell me about burger", "what are the ingredients in pizza?")
+- "order_item": User wants to add an item to their order (e.g., "I want vegetable samosa", "order butter chicken", "vegetable samosa", "yes" when AI just asked "Would you like to order it?")
 - "provide_info": User is providing their name or phone number (e.g., "My name is John", "John Doe", "My number is 1234567890", "It's 555-1234")
 - "confirm_order": User wants to confirm/place their order. ONLY use this if:
   * AI just asked "Is that correct?" or "correct?" AND user says "yes", "correct", "right", "sure", "okay", "yeah"
   * AI just asked "So your order is: [items]. Is that correct?" AND user says "yes"
   * User explicitly says "confirm order", "place order", "yes confirm"
+  * DO NOT use for "Yes" when AI asks "Would you like to order it?" - that's order_item
   * DO NOT use for "No" when AI asks "Anything else?" - that's general_question
 - "order_status": User wants to know their order ID or order status (e.g., "what's my order ID")
 - "angry_complaint": User is angry, frustrated, or complaining (e.g., "this is terrible", "I'm so angry", "this is ridiculous", "I hate this")
@@ -137,7 +174,8 @@ CRITICAL RULES - ORDER FLOW:
 1. When AI asks "Anything else?" and user says "No" → intent = general_question (AI should summarize order)
 2. When AI asks "Is that correct?" or "So your order is: [items]. Is that correct?" and user says "Yes" → intent = confirm_order (create order)
 3. When AI asks "Anything else?" and user says "Yes" → intent = order_item (they want to add more)
-4. "No" when AI asks "correct?" = confirm_order (means "No changes, confirm it")
+4. When AI asks "Would you like to order it?" and user says "Yes" → intent = order_item (they want to add the item to cart)
+5. "No" when AI asks "correct?" = confirm_order (means "No changes, confirm it")
 
 User message: "${query}"
 
@@ -152,29 +190,44 @@ Return ONLY valid JSON, no other text.`;
       { role: 'user', content: query }
     ];
 
+    const apiStart = Date.now();
+    // OPTIMIZATION: Use gpt-3.5-turbo for intent detection - much faster (~200-400ms vs 1700ms)
+    // gpt-3.5-turbo is sufficient for intent classification and is 4-5x faster
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4-turbo-preview',
+      model: 'gpt-3.5-turbo', // Changed from gpt-4-turbo-preview for speed
       messages: messages,
       temperature: 0.3,
       max_tokens: 100,
       response_format: { type: 'json_object' }
     });
+    const apiEnd = Date.now();
+    console.log(`⏱️  [PERF] OpenAI API call (intent): ${apiEnd - apiStart}ms`);
 
     const intentData = JSON.parse(completion.choices[0].message.content);
+    const intentEnd = Date.now();
+    console.log(`⏱️  [PERF] Intent detection total: ${intentEnd - intentStart}ms`);
     return intentData.intent || 'general_question';
   } catch (error) {
     console.error('Intent detection error:', error);
+    const intentEnd = Date.now();
+    console.log(`⏱️  [PERF] Intent detection (error): ${intentEnd - intentStart}ms`);
     return 'general_question';
   }
 }
 
 // AI Agent function to handle customer queries
 async function handleCustomerQuery(query, conversationHistory = []) {
+  const queryStart = Date.now();
   try {
+    const menuStart = Date.now();
     const menuItems = await getMenuContext();
     const formattedMenu = formatMenuForAI(menuItems);
-    const categories = await getMenuCategories();
+    
+    // OPTIMIZATION: Derive categories from cached menu items instead of separate DB query
+    const categories = [...new Set(menuItems.map(item => item.category))];
     const categoriesText = formatCategoriesForAI(categories);
+    const menuEnd = Date.now();
+    console.log(`⏱️  [PERF] Menu context fetch: ${menuEnd - menuStart}ms`);
 
     const systemPrompt = `You are a single, consistent, human-like assistant persona named "Maya". Speak in natural, conversational English with contractions, short sentences (1–3 sentences for most replies), and warm politeness. 
 
@@ -269,6 +322,7 @@ Remember: Use contractions, vary phrasing, keep it natural and conversational. O
       { role: 'user', content: query }
     ];
 
+    const apiStart = Date.now();
     const completion = await openai.chat.completions.create({
       model: 'gpt-4-turbo-preview',
       messages: messages,
@@ -278,15 +332,21 @@ Remember: Use contractions, vary phrasing, keep it natural and conversational. O
       frequency_penalty: 0.8,  // Important: reduces repeated phrases
       presence_penalty: 0.0
     });
+    const apiEnd = Date.now();
+    console.log(`⏱️  [PERF] OpenAI API call (query): ${apiEnd - apiStart}ms`);
 
     let response = completion.choices[0].message.content;
     
     // Post-process to remove duplicate phrases
     response = removeDuplicatePhrases(response);
     
+    const queryEnd = Date.now();
+    console.log(`⏱️  [PERF] handleCustomerQuery total: ${queryEnd - queryStart}ms`);
     return response;
   } catch (error) {
     console.error('AI Agent Error:', error);
+    const queryEnd = Date.now();
+    console.log(`⏱️  [PERF] handleCustomerQuery (error): ${queryEnd - queryStart}ms`);
     return "I'm sorry, I'm having trouble processing your request right now. Please try again later.";
   }
 }
