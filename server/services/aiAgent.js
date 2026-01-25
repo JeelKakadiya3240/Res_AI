@@ -35,7 +35,7 @@ function formatMenuForAI(menuItems) {
 // Detect user intent from query
 async function detectIntent(query, conversationHistory = []) {
   try {
-    const intentPrompt = `Analyze the user's message and determine their intent. Consider the conversation context.
+    const intentPrompt = `Analyze the user's message and determine their intent. Consider the conversation context carefully.
 
 Return ONLY a JSON object with this structure:
 {
@@ -46,12 +46,19 @@ Return ONLY a JSON object with this structure:
 Intent meanings:
 - "menu_inquiry": User wants to know what's on the menu (e.g., "what's on the menu", "show me menu")
 - "item_inquiry": User wants details about a specific item (ingredients, spice level, price)
-- "order_item": User wants to add an item to their order (e.g., "I want vegetable samosa", "order butter chicken")
-- "confirm_order": User wants to confirm/place their order. Look for: "yes", "correct", "confirm", "place order", "that's all", "nothing else" - especially if AI just asked for confirmation
+- "order_item": User wants to add an item to their order (e.g., "I want vegetable samosa", "order butter chicken", "vegetable samosa")
+- "confirm_order": User wants to confirm/place their order. ONLY use this if:
+  * AI just asked "correct?" or "confirm?" AND user says "yes", "correct", "right", "sure", "okay"
+  * User explicitly says "confirm order", "place order", "yes confirm"
+  * DO NOT use for "No" when AI asks "Anything else?" - that's general_question
 - "order_status": User wants to know their order ID or order status (e.g., "what's my order ID")
-- "general_question": General questions about the restaurant
+- "general_question": General questions, "No" to "Anything else?", or other responses
 
-IMPORTANT: If the AI just asked "correct?" or "confirm?" and user says "yes", "correct", "right", etc., the intent is "confirm_order".
+CRITICAL RULES:
+- "No" when AI asks "Anything else?" = general_question (NOT confirm_order)
+- "No" when AI asks "correct?" = confirm_order (means "No, I don't want to change it, confirm it")
+- "Yes" when AI asks "correct?" = confirm_order
+- "Yes" when AI asks "Anything else?" = order_item (they want to add more)
 
 User message: "${query}"
 
