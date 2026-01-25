@@ -109,9 +109,9 @@ function formatNaturalSpeech(text) {
   // If two breaks are within 500ms worth of content, remove the second
   formatted = formatted.replace(/(<break time="\d+ms"\/>)\s*(?:\w+\s*){0,5}\1/g, '$1');
   
-  // Wrap in SSML with prosody for natural speech (medium rate, warmer tone)
+  // Wrap in SSML with prosody for natural speech (slower rate for clarity)
   return `<speak>
-    <prosody rate="100%" pitch="+0st">
+    <prosody rate="85%" pitch="+0st">
       ${formatted}
     </prosody>
   </speak>`;
