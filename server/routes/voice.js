@@ -171,7 +171,7 @@ router.post('/handle-speech', async (req, res) => {
       conversation_data: { messages: conversationHistory }
     });
 
-    // Check if user wants to place/confirm an order (more specific detection)
+    // Check if user wants to place/confirm an order (improved detection)
     const lowerResponse = speechResult.toLowerCase().trim();
     const confirmPhrases = [
       'confirm order',
@@ -183,11 +183,32 @@ router.post('/handle-speech', async (req, res) => {
       'nothing else',
       'yes that\'s it',
       'yes place order',
-      'go ahead and confirm'
+      'go ahead and confirm',
+      'yes',
+      'yeah',
+      'yep',
+      'correct',
+      'right',
+      'sure',
+      'okay',
+      'ok'
     ];
     
+    // Check if AI just asked for confirmation in the last message
+    const lastAIMessage = conversationHistory
+      .filter(m => m.role === 'assistant')
+      .slice(-1)[0]?.content?.toLowerCase() || '';
+    
+    const aiAskedForConfirmation = lastAIMessage.includes('confirm') || 
+                                   lastAIMessage.includes('correct') ||
+                                   lastAIMessage.includes('place the order');
+    
+    // Check if user response is a confirmation
+    const isSimpleYes = ['yes', 'yeah', 'yep', 'correct', 'right', 'sure', 'okay', 'ok'].includes(lowerResponse);
+    
     const wantsToConfirm = confirmPhrases.some(phrase => lowerResponse.includes(phrase)) ||
-      (lowerResponse.includes('confirm') && (lowerResponse.includes('order') || lowerResponse.includes('yes')));
+      (lowerResponse.includes('confirm') && (lowerResponse.includes('order') || lowerResponse.includes('yes'))) ||
+      (isSimpleYes && aiAskedForConfirmation);
     
     if (wantsToConfirm) {
       console.log('🔔 Order confirmation detected:', speechResult);
@@ -290,7 +311,12 @@ router.post('/handle-speech', async (req, res) => {
 
           // Read order ID character by character for better voice clarity
           const orderIdSpoken = order.order_id.split('').join(' ');
-          twiml.say(`Great! Your order has been confirmed. Your order ID is ${orderIdSpoken}. The total amount is ${totalAmount.toFixed(2)} dollars. Thank you for your order!`);
+          const confirmationMessage = `Great! Your order has been confirmed. Your order ID is ${orderIdSpoken}. The total amount is ${totalAmount.toFixed(2)} dollars. Thank you for your order!`;
+          
+          // Update AI response to include order confirmation
+          conversationHistory[conversationHistory.length - 1].content = confirmationMessage;
+          
+          twiml.say(confirmationMessage);
           
           // Update conversation with order info
           await saveConversationToDB(callSid, {
@@ -301,8 +327,13 @@ router.post('/handle-speech', async (req, res) => {
           
           // Save order confirmation message
           if (conv) {
-            await saveMessageToDB(conv.id, 'assistant', `Order confirmed: ${order.order_id}, Total: $${totalAmount.toFixed(2)}`);
+            await saveMessageToDB(conv.id, 'assistant', confirmationMessage);
           }
+          
+          // Update conversation data with final confirmation
+          await saveConversationToDB(callSid, {
+            conversation_data: { messages: conversationHistory }
+          });
           
           conversations.delete(callSid);
         }
