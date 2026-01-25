@@ -38,24 +38,32 @@ async function handleCustomerQuery(query, conversationHistory = []) {
     const menuItems = await getMenuContext();
     const formattedMenu = formatMenuForAI(menuItems);
 
-    const systemPrompt = `You are a friendly AI assistant for a restaurant. Your role is to:
-1. Provide information about menu items, their ingredients, spice levels (0-5), and prices
-2. Help customers understand what dishes are available
-3. Assist with order placement
-4. Answer questions about the restaurant's offerings
+    const systemPrompt = `You are a friendly restaurant staff member taking phone orders. Be natural, concise, and human-like. 
+
+IMPORTANT RULES:
+1. When asked about the menu, mention 3-4 popular items briefly, then ask what they'd like. DON'T list all items.
+2. Speak naturally - like a real person, not a robot reading a list.
+3. Keep responses SHORT and conversational (2-3 sentences max).
+4. When customer mentions an item, confirm it and ask if they want anything else.
+5. Only proceed to order confirmation when customer explicitly says "confirm", "place order", "yes confirm", or "that's all".
 
 Menu Items:
 ${JSON.stringify(formattedMenu, null, 2)}
 
 Spice Level Guide:
 - 0: No spice
-- 1: Mild
+- 1: Mild  
 - 2: Medium
 - 3: Medium-Hot
 - 4: Hot
 - 5: Very Hot
 
-Be conversational, helpful, and accurate. If asked about ordering, guide them through the process.`;
+Example responses:
+- "What's on the menu?" → "We have Butter Chicken, Chicken Biryani, Paneer Tikka, and Dal Makhani. What would you like?"
+- "I want vegetable samosa" → "Got it, one Vegetable Samosa. Anything else?"
+- "Confirm order" → "Perfect! Your order is confirmed. Your order ID is..."
+
+Be friendly, brief, and natural.`;
 
     const messages = [
       { role: 'system', content: systemPrompt },
@@ -66,8 +74,8 @@ Be conversational, helpful, and accurate. If asked about ordering, guide them th
     const completion = await openai.chat.completions.create({
       model: 'gpt-4-turbo-preview',
       messages: messages,
-      temperature: 0.7,
-      max_tokens: 500
+      temperature: 0.8,
+      max_tokens: 150  // Shorter responses for more natural conversation
     });
 
     return completion.choices[0].message.content;
@@ -116,17 +124,42 @@ Return ONLY valid JSON, no other text.`;
 
     const orderData = JSON.parse(completion.choices[0].message.content);
     
-    // Map menu item names to IDs
+    // Map menu item names to IDs (with fuzzy matching)
     const itemsWithIds = [];
     for (const item of orderData.items || []) {
-      const menuItem = menuItems.find(m => 
-        m.name.toLowerCase() === item.menu_item_name.toLowerCase()
+      const itemNameLower = item.menu_item_name.toLowerCase().trim();
+      
+      // Try exact match first
+      let menuItem = menuItems.find(m => 
+        m.name.toLowerCase() === itemNameLower
       );
+      
+      // Try partial match if exact match fails
+      if (!menuItem) {
+        menuItem = menuItems.find(m => 
+          m.name.toLowerCase().includes(itemNameLower) || 
+          itemNameLower.includes(m.name.toLowerCase())
+        );
+      }
+      
+      // Try matching without common words
+      if (!menuItem) {
+        const itemWords = itemNameLower.split(/\s+/);
+        menuItem = menuItems.find(m => {
+          const menuWords = m.name.toLowerCase().split(/\s+/);
+          return itemWords.some(w => menuWords.includes(w)) && 
+                 menuWords.some(w => itemWords.includes(w));
+        });
+      }
+      
       if (menuItem) {
         itemsWithIds.push({
           menu_item_id: menuItem.id,
           quantity: item.quantity || 1
         });
+        console.log(`✅ Matched "${item.menu_item_name}" to "${menuItem.name}"`);
+      } else {
+        console.warn(`⚠️ Could not match menu item: "${item.menu_item_name}"`);
       }
     }
 

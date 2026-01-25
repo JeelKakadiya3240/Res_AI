@@ -171,15 +171,33 @@ router.post('/handle-speech', async (req, res) => {
       conversation_data: { messages: conversationHistory }
     });
 
-    // Check if user wants to place an order
-    const lowerResponse = speechResult.toLowerCase();
-    if (lowerResponse.includes('place order') || lowerResponse.includes('confirm order') || 
-        lowerResponse.includes('order') && (lowerResponse.includes('yes') || lowerResponse.includes('confirm'))) {
+    // Check if user wants to place/confirm an order (more specific detection)
+    const lowerResponse = speechResult.toLowerCase().trim();
+    const confirmPhrases = [
+      'confirm order',
+      'place order',
+      'yes confirm',
+      'confirm it',
+      'that\'s all',
+      'that is all',
+      'nothing else',
+      'yes that\'s it',
+      'yes place order',
+      'go ahead and confirm'
+    ];
+    
+    const wantsToConfirm = confirmPhrases.some(phrase => lowerResponse.includes(phrase)) ||
+      (lowerResponse.includes('confirm') && (lowerResponse.includes('order') || lowerResponse.includes('yes')));
+    
+    if (wantsToConfirm) {
+      console.log('🔔 Order confirmation detected:', speechResult);
       
       // Extract order details
+      console.log('📦 Extracting order from conversation...');
       const orderData = await extractOrderFromConversation(conversationHistory);
+      console.log('📦 Extracted order data:', JSON.stringify(orderData, null, 2));
       
-      if (orderData && orderData.items.length > 0) {
+      if (orderData && orderData.items && orderData.items.length > 0) {
         // Calculate total amount and prepare order items
         let totalAmount = 0;
         const orderItems = [];
@@ -222,6 +240,12 @@ router.post('/handle-speech', async (req, res) => {
         const orderId = `ORD-${Date.now()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
 
         // Create order
+        console.log('💾 Creating order in database...', {
+          order_id: orderId,
+          items: orderItems.length,
+          total: totalAmount
+        });
+        
         const { data: order, error: orderError } = await supabase
           .from('orders')
           .insert({
@@ -236,9 +260,15 @@ router.post('/handle-speech', async (req, res) => {
           .single();
 
         if (orderError || !order) {
-          console.error('Order creation error:', orderError);
-          twiml.say('I apologize, but there was an error processing your order. Please try again.');
+          console.error('❌ Order creation error:', orderError);
+          console.error('Order data attempted:', {
+            order_id: orderId,
+            items: orderItems,
+            total: totalAmount
+          });
+          twiml.say('I apologize, but there was an error processing your order. Please try again or call back.');
         } else {
+          console.log('✅ Order created successfully:', order.order_id);
           // Create order items
           const orderItemsData = orderItems.map(oi => ({
             order_id: order.id,
@@ -253,7 +283,9 @@ router.post('/handle-speech', async (req, res) => {
             .insert(orderItemsData);
 
           if (itemsError) {
-            console.error('Order items creation error:', itemsError);
+            console.error('❌ Order items creation error:', itemsError);
+          } else {
+            console.log('✅ Order items created successfully');
           }
 
           // Read order ID character by character for better voice clarity
