@@ -381,8 +381,8 @@ router.post('/handle-speech', async (req, res) => {
       const updatedInfo = getCustomerInfo(callSid);
       console.log('📝 Updated customer info:', updatedInfo);
       
-      // Check what we still need
-      if (!customerInfo.name) {
+      // Check what we still need (use updated info)
+      if (!updatedInfo.name) {
         // Still need name
         const response = 'I didn\'t catch your name. Could you please tell me your name?';
         conversationHistory.push({ role: 'assistant', content: response, intent: 'asking_name' });
@@ -398,9 +398,9 @@ router.post('/handle-speech', async (req, res) => {
           method: 'POST',
           speechTimeout: 'auto'
         });
-      } else if (!customerInfo.phone) {
+      } else if (!updatedInfo.phone) {
         // Have name, need phone
-        const response = `Thank you, ${customerInfo.name}. What's your phone number?`;
+        const response = `Thank you, ${updatedInfo.name}. What's your phone number?`;
         conversationHistory.push({ role: 'assistant', content: response, intent: 'asking_phone' });
         
         if (conv) {
