@@ -110,8 +110,11 @@ function formatNaturalSpeech(text) {
   formatted = formatted.replace(/(<break time="\d+ms"\/>)\s*(?:\w+\s*){0,5}\1/g, '$1');
   
   // Wrap in SSML with prosody for natural speech (slower rate for clarity)
+  // For Amazon Polly, use "slow" or "x-slow" for slower speech
+  // Rate options: "x-slow" (50%), "slow" (75%), "medium" (100%), "fast" (150%), "x-fast" (200%)
+  // Using "slow" = 75% of normal speed (noticeably slower but still natural)
   return `<speak>
-    <prosody rate="65%" pitch="+0st">
+    <prosody rate="slow" pitch="+0st">
       ${formatted}
     </prosody>
   </speak>`;
