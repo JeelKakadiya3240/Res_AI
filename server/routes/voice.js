@@ -110,14 +110,16 @@ function formatNaturalSpeech(text) {
 
 // Helper function to say text with human-like voice
 function sayNatural(twiml, text, options = {}) {
-  // Use Amazon Polly neural voice - warm, natural female voice
-  // Available female voices:
-  // - polly.Joanna (US English, female, neural) - natural and clear
-  // - polly.Kendra (US English, female, neural) - warm and friendly
-  // - polly.Kimberly (US English, female, neural) - professional
-  // - polly.Amy (British English, female, neural) - British accent
-  // - polly.Salli (US English, female, standard) - widely available
-  const voice = options.voice || 'polly.Joanna'; // Natural female voice (widely available)
+  // Use Twilio's built-in female voice (always available) or Amazon Polly
+  // Built-in Twilio voices (always available):
+  // - alice (female, US English) - DEFAULT - always works
+  // - man (male, US English)
+  // - woman (female, US English)
+  // Amazon Polly voices (premium, may not be available in all regions):
+  // - polly.Joanna (US English, female, neural)
+  // - polly.Kendra (US English, female, neural)
+  // - polly.Salli (US English, female, standard)
+  const voice = options.voice || 'alice'; // Built-in female voice (always available)
   const language = options.language || 'en-US';
   
   // Use SSML for more natural speech with pauses and prosody
