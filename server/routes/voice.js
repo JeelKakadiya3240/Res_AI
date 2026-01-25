@@ -173,6 +173,14 @@ router.post('/handle-speech', async (req, res) => {
 
     // Check if user wants to place/confirm an order (improved detection)
     const lowerResponse = speechResult.toLowerCase().trim();
+    
+    // Handle phrases like "No confirm" or "No, confirm" - these mean "No (nothing else), confirm (the order)"
+    const normalizedResponse = lowerResponse
+      .replace(/^no\s*,\s*confirm/i, 'confirm')  // "No, confirm" -> "confirm"
+      .replace(/^no\s+confirm/i, 'confirm')      // "No confirm" -> "confirm"
+      .replace(/^nothing\s+else\s*,\s*confirm/i, 'confirm')
+      .trim();
+    
     const confirmPhrases = [
       'confirm order',
       'place order',
@@ -184,14 +192,9 @@ router.post('/handle-speech', async (req, res) => {
       'yes that\'s it',
       'yes place order',
       'go ahead and confirm',
-      'yes',
-      'yeah',
-      'yep',
-      'correct',
-      'right',
-      'sure',
-      'okay',
-      'ok'
+      'confirm my order',
+      'i want to confirm',
+      'i confirm'
     ];
     
     // Check if AI just asked for confirmation in the last message
@@ -203,17 +206,24 @@ router.post('/handle-speech', async (req, res) => {
                                    lastAIMessage.includes('correct') ||
                                    lastAIMessage.includes('place the order');
     
-    // Check if user response is a confirmation
-    const isSimpleYes = ['yes', 'yeah', 'yep', 'correct', 'right', 'sure', 'okay', 'ok'].includes(lowerResponse);
+    // Check if user response is a simple confirmation
+    const isSimpleYes = ['yes', 'yeah', 'yep', 'correct', 'right', 'sure', 'okay', 'ok'].includes(normalizedResponse);
     
-    const wantsToConfirm = confirmPhrases.some(phrase => lowerResponse.includes(phrase)) ||
-      (lowerResponse.includes('confirm') && (lowerResponse.includes('order') || lowerResponse.includes('yes'))) ||
+    // Check for confirmation phrases (use normalized response)
+    const hasConfirmPhrase = confirmPhrases.some(phrase => normalizedResponse.includes(phrase));
+    
+    // Check if response contains "confirm" and "order"
+    const hasConfirmAndOrder = normalizedResponse.includes('confirm') && normalizedResponse.includes('order');
+    
+    const wantsToConfirm = hasConfirmPhrase ||
+      hasConfirmAndOrder ||
       (isSimpleYes && aiAskedForConfirmation);
     
     if (wantsToConfirm) {
       console.log('🔔 Order confirmation detected:', speechResult);
+      console.log('📝 Full conversation history:', JSON.stringify(conversationHistory, null, 2));
       
-      // Extract order details
+      // Extract order details from ENTIRE conversation
       console.log('📦 Extracting order from conversation...');
       const orderData = await extractOrderFromConversation(conversationHistory);
       console.log('📦 Extracted order data:', JSON.stringify(orderData, null, 2));

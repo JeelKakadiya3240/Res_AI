@@ -93,7 +93,9 @@ async function extractOrderFromConversation(conversationHistory) {
     const menuItems = await getMenuContext();
     const formattedMenu = formatMenuForAI(menuItems);
 
-    const systemPrompt = `Extract order details from the conversation. Return a JSON object with this structure:
+    const systemPrompt = `Extract order details from the ENTIRE conversation history. Look for ALL items mentioned throughout the conversation, not just the last message.
+
+Return a JSON object with this structure:
 {
   "items": [
     {
@@ -105,13 +107,21 @@ async function extractOrderFromConversation(conversationHistory) {
   "customer_phone": "phone if mentioned"
 }
 
-IMPORTANT: Match item names to the exact menu item names below. Handle common typos:
-- "simosa" or "samos" = "Vegetable Samosa"
-- "biriyani" = "Chicken Biryani"
-- Use the EXACT menu item name from the list below.
+IMPORTANT RULES:
+1. Look through the ENTIRE conversation for items mentioned
+2. Match item names to the exact menu item names below
+3. Handle common typos:
+   - "simosa" or "samos" = "Vegetable Samosa"
+   - "biriyani" = "Chicken Biryani"
+   - "butter chicken" = "Butter Chicken"
+4. If customer said "vegetable samosa" or "samosa", use "Vegetable Samosa"
+5. If quantity is not mentioned, default to 1
+6. Use the EXACT menu item name from the list below
 
 Available menu items:
 ${JSON.stringify(formattedMenu.map(item => ({ name: item.name })), null, 2)}
+
+Example: If conversation mentions "I want vegetable samosa" earlier, extract it even if the last message is just "confirm order".
 
 Return ONLY valid JSON, no other text.`;
 
