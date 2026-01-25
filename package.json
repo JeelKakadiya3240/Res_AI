@@ -8,7 +8,11 @@
     "dev:server": "nodemon server/index.js",
     "dev:dashboard": "cd dashboard && npm run dev",
     "install:all": "npm install && cd dashboard && npm install",
-    "build": "cd dashboard && npm run build"
+    "build": "cd dashboard && npm run build",
+    "ngrok": "ngrok http 3001",
+    "test:local": "node test-api.js",
+    "test:voice": "node test-voice-local.js",
+    "dev:local": "concurrently \"npm run dev:server\" \"npm run ngrok\""
   },
   "keywords": ["ai", "restaurant", "voice", "supabase"],
   "author": "",

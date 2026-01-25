@@ -110,8 +110,12 @@ function formatNaturalSpeech(text) {
   formatted = formatted.replace(/(<break time="\d+ms"\/>)\s*(?:\w+\s*){0,5}\1/g, '$1');
   
   // Wrap in SSML with prosody for natural speech (slower rate for clarity)
+  // Using percentage rate: 35% = 65% slower than normal (100%)
+  // Options: x-slow, slow, medium, fast, x-fast (presets)
+  // Or percentage: 20-200% (100% = normal speed)
+  // Note: SSML prosody only works with Amazon Polly voices, not built-in Twilio voices
   return `<speak>
-    <prosody rate="85%" pitch="+0st">
+    <prosody rate="35%">
       ${formatted}
     </prosody>
   </speak>`;
@@ -119,19 +123,17 @@ function formatNaturalSpeech(text) {
 
 // Helper function to say text with human-like voice
 function sayNatural(twiml, text, options = {}) {
-  // Use Twilio's built-in female voice (always available) or Amazon Polly
-  // Built-in Twilio voices (always available):
-  // - alice (female, US English) - DEFAULT - always works
-  // - man (male, US English)
-  // - woman (female, US English)
-  // Amazon Polly voices (premium, may not be available in all regions):
-  // - polly.Joanna (US English, female, neural)
+  // Use Amazon Polly voice for SSML support (prosody rate control)
+  // Built-in Twilio voices (alice, man, woman) do NOT support SSML prosody
+  // Amazon Polly voices (premium, support SSML):
+  // - polly.Joanna (US English, female, neural) - DEFAULT - supports SSML
   // - polly.Kendra (US English, female, neural)
   // - polly.Salli (US English, female, standard)
-  const voice = options.voice || 'alice'; // Built-in female voice (always available)
+  const voice = options.voice || 'polly.Joanna'; // Amazon Polly voice with SSML support
   const language = options.language || 'en-US';
   
   // Use SSML for more natural speech with pauses and prosody
+  // Note: SSML prosody rate only works with Amazon Polly voices
   twiml.say({
     voice: voice,
     language: language
