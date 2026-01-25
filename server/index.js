@@ -14,10 +14,12 @@ app.use(express.urlencoded({ extended: true }));
 const menuRoutes = require('./routes/menu');
 const orderRoutes = require('./routes/orders');
 const voiceRoutes = require('./routes/voice');
+const conversationRoutes = require('./routes/conversations');
 
 app.use('/api/menu', menuRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/voice', voiceRoutes);
+app.use('/api/conversations', conversationRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
@@ -31,7 +33,8 @@ app.get('/', (req, res) => {
     endpoints: {
       menu: '/api/menu',
       orders: '/api/orders',
-      voice: '/api/voice'
+      voice: '/api/voice',
+      conversations: '/api/conversations'
     }
   });
 });

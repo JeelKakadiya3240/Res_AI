@@ -27,11 +27,74 @@ if (accountSid && authToken && accountSid.startsWith('AC') && !accountSid.includ
 // Store conversation history (in production, use Redis or database)
 const conversations = new Map();
 
+// Helper function to save/update conversation in database
+async function saveConversationToDB(callSid, data) {
+  try {
+    // Check if conversation exists
+    const { data: existing } = await supabase
+      .from('conversations')
+      .select('id')
+      .eq('call_sid', callSid)
+      .single();
+
+    if (existing) {
+      // Update existing conversation
+      const { error } = await supabase
+        .from('conversations')
+        .update(data)
+        .eq('call_sid', callSid);
+      if (error) console.error('Error updating conversation:', error);
+    } else {
+      // Create new conversation
+      const { error } = await supabase
+        .from('conversations')
+        .insert({
+          call_sid: callSid,
+          ...data
+        });
+      if (error) console.error('Error creating conversation:', error);
+    }
+  } catch (error) {
+    console.error('Error saving conversation to DB:', error);
+  }
+}
+
+// Helper function to save message to database
+async function saveMessageToDB(conversationId, role, content) {
+  try {
+    const { error } = await supabase
+      .from('conversation_messages')
+      .insert({
+        conversation_id: conversationId,
+        role: role,
+        content: content
+      });
+    if (error) console.error('Error saving message:', error);
+  } catch (error) {
+    console.error('Error saving message to DB:', error);
+  }
+}
+
 // Handle incoming call
-router.post('/incoming-call', (req, res) => {
+router.post('/incoming-call', async (req, res) => {
   if (!twilio) {
     return res.status(503).json({ error: 'Twilio is not configured. Please set up Twilio credentials in your .env file.' });
   }
+  
+  const callSid = req.body.CallSid;
+  const fromNumber = req.body.From;
+  
+  // Initialize conversation in memory
+  if (!conversations.has(callSid)) {
+    conversations.set(callSid, []);
+  }
+  
+  // Save conversation start to database
+  await saveConversationToDB(callSid, {
+    customer_phone: fromNumber,
+    call_status: 'ringing',
+    conversation_data: { messages: [] }
+  });
   
   const twiml = new twilio.twiml.VoiceResponse();
   
@@ -68,11 +131,28 @@ router.post('/handle-speech', async (req, res) => {
   // Get or create conversation history
   if (!conversations.has(callSid)) {
     conversations.set(callSid, []);
+    // Initialize conversation in DB if not exists
+    await saveConversationToDB(callSid, {
+      customer_phone: req.body.From,
+      call_status: 'in-progress',
+      conversation_data: { messages: [] }
+    });
   }
   const conversationHistory = conversations.get(callSid);
 
   // Add user message to history
   conversationHistory.push({ role: 'user', content: speechResult });
+  
+  // Get conversation ID and save message to DB
+  const { data: conv } = await supabase
+    .from('conversations')
+    .select('id')
+    .eq('call_sid', callSid)
+    .single();
+  
+  if (conv) {
+    await saveMessageToDB(conv.id, 'user', speechResult);
+  }
 
   try {
     // Get AI response
@@ -80,6 +160,16 @@ router.post('/handle-speech', async (req, res) => {
     
     // Add AI response to history
     conversationHistory.push({ role: 'assistant', content: aiResponse });
+    
+    // Save AI response to DB
+    if (conv) {
+      await saveMessageToDB(conv.id, 'assistant', aiResponse);
+    }
+    
+    // Update conversation data in DB
+    await saveConversationToDB(callSid, {
+      conversation_data: { messages: conversationHistory }
+    });
 
     // Check if user wants to place an order
     const lowerResponse = speechResult.toLowerCase();
@@ -169,6 +259,19 @@ router.post('/handle-speech', async (req, res) => {
           // Read order ID character by character for better voice clarity
           const orderIdSpoken = order.order_id.split('').join(' ');
           twiml.say(`Great! Your order has been confirmed. Your order ID is ${orderIdSpoken}. The total amount is ${totalAmount.toFixed(2)} dollars. Thank you for your order!`);
+          
+          // Update conversation with order info
+          await saveConversationToDB(callSid, {
+            order_id: order.order_id,
+            order_placed: true,
+            customer_name: orderData.customer_name || null
+          });
+          
+          // Save order confirmation message
+          if (conv) {
+            await saveMessageToDB(conv.id, 'assistant', `Order confirmed: ${order.order_id}, Total: $${totalAmount.toFixed(2)}`);
+          }
+          
           conversations.delete(callSid);
         }
       } else {
@@ -206,8 +309,29 @@ router.post('/handle-speech', async (req, res) => {
 });
 
 // Webhook status callback
-router.post('/status-callback', (req, res) => {
-  console.log('Call status:', req.body.CallStatus);
+router.post('/status-callback', async (req, res) => {
+  const callSid = req.body.CallSid;
+  const callStatus = req.body.CallStatus;
+  const callDuration = req.body.CallDuration;
+  
+  console.log('Call status:', callStatus, 'Call SID:', callSid);
+  
+  // Update conversation status in database
+  if (callSid) {
+    const updateData = {
+      call_status: callStatus
+    };
+    
+    if (callStatus === 'completed' || callStatus === 'failed' || callStatus === 'busy' || callStatus === 'no-answer') {
+      updateData.ended_at = new Date().toISOString();
+      if (callDuration) {
+        updateData.call_duration = parseInt(callDuration);
+      }
+    }
+    
+    await saveConversationToDB(callSid, updateData);
+  }
+  
   res.status(200).send('OK');
 });
 
