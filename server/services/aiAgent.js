@@ -48,17 +48,18 @@ Intent meanings:
 - "item_inquiry": User wants details about a specific item (ingredients, spice level, price)
 - "order_item": User wants to add an item to their order (e.g., "I want vegetable samosa", "order butter chicken", "vegetable samosa")
 - "confirm_order": User wants to confirm/place their order. ONLY use this if:
-  * AI just asked "correct?" or "confirm?" AND user says "yes", "correct", "right", "sure", "okay"
+  * AI just asked "Is that correct?" or "correct?" AND user says "yes", "correct", "right", "sure", "okay", "yeah"
+  * AI just asked "So your order is: [items]. Is that correct?" AND user says "yes"
   * User explicitly says "confirm order", "place order", "yes confirm"
   * DO NOT use for "No" when AI asks "Anything else?" - that's general_question
 - "order_status": User wants to know their order ID or order status (e.g., "what's my order ID")
 - "general_question": General questions, "No" to "Anything else?", or other responses
 
-CRITICAL RULES:
-- "No" when AI asks "Anything else?" = general_question (NOT confirm_order)
-- "No" when AI asks "correct?" = confirm_order (means "No, I don't want to change it, confirm it")
-- "Yes" when AI asks "correct?" = confirm_order
-- "Yes" when AI asks "Anything else?" = order_item (they want to add more)
+CRITICAL RULES - ORDER FLOW:
+1. When AI asks "Anything else?" and user says "No" → intent = general_question (AI should summarize order)
+2. When AI asks "Is that correct?" or "So your order is: [items]. Is that correct?" and user says "Yes" → intent = confirm_order (create order)
+3. When AI asks "Anything else?" and user says "Yes" → intent = order_item (they want to add more)
+4. "No" when AI asks "correct?" = confirm_order (means "No changes, confirm it")
 
 User message: "${query}"
 
@@ -97,15 +98,23 @@ async function handleCustomerQuery(query, conversationHistory = []) {
 
     const systemPrompt = `You are a friendly restaurant staff member taking phone orders. Be natural, concise, and human-like. 
 
-CRITICAL RULES:
-1. When asked about the menu, mention 3-4 popular items briefly, then ask what they'd like. DON'T list all items.
-2. Speak naturally - like a real person, not a robot reading a list.
-3. Keep responses SHORT and conversational (2-3 sentences max).
-4. When customer mentions an item, confirm it and ask if they want anything else.
-5. When customer says they don't want anything else, ask: "Just to confirm, you want to place the order for [items], correct?"
-6. NEVER say "order confirmed" or give an order ID unless you are explicitly told the order was saved to the database.
-7. If customer asks for order ID before order is placed, say: "Your order hasn't been confirmed yet. Would you like to confirm your order?"
-8. Wait for explicit confirmation before proceeding to order placement.
+CRITICAL RULES - ORDER FLOW:
+1. When customer says "I want to order X" or "I want X" → This is ADDING to their order (cart), NOT confirming. Say: "Got it, [item]. Anything else?"
+2. When customer says "No" to "Anything else?" → Summarize their FULL order and ask: "So your order is: [list all items]. Is that correct?"
+3. When customer says "Yes" to "Is that correct?" → This is confirmation. DO NOT say "order confirmed" yet - the system will handle that.
+4. NEVER say "order confirmed" or give an order ID unless you are explicitly told the order was saved to the database.
+5. Track ALL items mentioned throughout the conversation - they're building their order.
+
+CONVERSATION FLOW:
+- Customer orders item → "Got it, [item]. Anything else?"
+- Customer says "No" (nothing else) → "So your order is: [list all items with quantities]. Is that correct?"
+- Customer says "Yes" (to confirmation) → "Perfect! Let me process your order..." (system will confirm)
+
+OTHER RULES:
+- When asked about the menu, mention 3-4 popular items briefly, then ask what they'd like. DON'T list all items.
+- Speak naturally - like a real person, not a robot reading a list.
+- Keep responses SHORT and conversational (2-3 sentences max).
+- If customer asks for order ID before order is placed, say: "Your order hasn't been confirmed yet. Would you like to confirm your order?"
 
 Menu Items:
 ${JSON.stringify(formattedMenu, null, 2)}
@@ -121,9 +130,10 @@ Spice Level Guide:
 Example responses:
 - "What's on the menu?" → "We have Butter Chicken, Chicken Biryani, Paneer Tikka, and Dal Makhani. What would you like?"
 - "I want vegetable samosa" → "Got it, one Vegetable Samosa. Anything else?"
-- "Yes" (to confirmation) → "Perfect! Let me process your order..." (DO NOT say confirmed yet)
+- "No" (to "Anything else?") → "So your order is: one Vegetable Samosa. Is that correct?"
+- "Yes" (to confirmation) → "Perfect! Let me process your order..." (DO NOT say confirmed yet - system handles it)
 
-Be friendly, brief, and natural.`;
+Be friendly, brief, and natural. Remember: ordering items = adding to cart, only "Yes" to confirmation = place order.`;
 
     const messages = [
       { role: 'system', content: systemPrompt },
@@ -294,47 +304,106 @@ Return ONLY valid JSON, no other text.`;
     if (itemsWithIds.length === 0) {
       console.log('🔄 No items found in AI extraction, trying fallback extraction from assistant messages...');
       
-      // Look for assistant messages that confirm items (e.g., "Got it, one Vegetable Samosa")
+      // Look for assistant messages that confirm items or summarize orders
       for (const msg of cleanHistory) {
         if (msg.role === 'assistant' && msg.content) {
-          const content = msg.content.toLowerCase();
+          const content = msg.content;
+          const contentLower = content.toLowerCase();
           
-          // Pattern: "Got it, one [item]" or "one [item]"
-          const patterns = [
-            /got it,?\s*(?:one|1|two|2|three|3|four|4|five|5)\s+([^.!?]+)/i,
-            /(?:one|1|two|2|three|3|four|4|five|5)\s+([^.!?]+?)(?:\s|,|\.|$)/i
-          ];
+          // Pattern 1: "So your order is: [items]. Is that correct?"
+          const summaryPattern = /so your order is:?\s*(.+?)(?:\.|,|\?|is that correct)/i;
+          const summaryMatch = content.match(summaryPattern);
           
-          for (const pattern of patterns) {
-            const match = content.match(pattern);
-            if (match) {
-              const mentionedItem = match[1].trim();
-              console.log(`🔍 Found mentioned item in assistant message: "${mentionedItem}"`);
-              
-              // Try to match this to a menu item
-              for (const menuItem of menuItems) {
-                const menuNameLower = menuItem.name.toLowerCase();
-                const mentionedLower = mentionedItem.toLowerCase();
+          if (summaryMatch) {
+            const orderSummary = summaryMatch[1].trim();
+            console.log(`🔍 Found order summary: "${orderSummary}"`);
+            
+            // Parse items from summary (e.g., "one Vegetable Samosa, two Butter Chicken")
+            const itemPatterns = [
+              /(?:one|1|two|2|three|3|four|4|five|5)\s+([^,\.!?]+)/gi,
+              /(\d+)\s+([^,\.!?]+)/gi
+            ];
+            
+            for (const pattern of itemPatterns) {
+              let match;
+              while ((match = pattern.exec(orderSummary)) !== null) {
+                let quantity = 1;
+                let itemName = '';
                 
-                // Check if menu item name contains the mentioned item or vice versa
-                if (menuNameLower.includes(mentionedLower) || mentionedLower.includes(menuNameLower)) {
-                  // Extract quantity if mentioned
-                  const qtyMatch = content.match(/(?:one|1|two|2|three|3|four|4|five|5)/i);
-                  let quantity = 1;
-                  if (qtyMatch) {
-                    const qtyText = qtyMatch[0].toLowerCase();
-                    if (qtyText.includes('two') || qtyText === '2') quantity = 2;
-                    else if (qtyText.includes('three') || qtyText === '3') quantity = 3;
-                    else if (qtyText.includes('four') || qtyText === '4') quantity = 4;
-                    else if (qtyText.includes('five') || qtyText === '5') quantity = 5;
-                  }
+                if (match[2]) {
+                  // Pattern with number: "2 Vegetable Samosa"
+                  quantity = parseInt(match[1]) || 1;
+                  itemName = match[2].trim();
+                } else {
+                  // Pattern with word: "one Vegetable Samosa"
+                  const qtyText = match[0].toLowerCase();
+                  if (qtyText.includes('two') || qtyText.includes('2')) quantity = 2;
+                  else if (qtyText.includes('three') || qtyText.includes('3')) quantity = 3;
+                  else if (qtyText.includes('four') || qtyText.includes('4')) quantity = 4;
+                  else if (qtyText.includes('five') || qtyText.includes('5')) quantity = 5;
                   
-                  itemsWithIds.push({
-                    menu_item_id: menuItem.id,
-                    quantity: quantity
-                  });
-                  console.log(`✅ Fallback matched "${mentionedItem}" to "${menuItem.name}" (qty: ${quantity})`);
-                  break; // Found a match, move to next message
+                  itemName = match[1].trim();
+                }
+                
+                console.log(`🔍 Extracted from summary: "${itemName}" (qty: ${quantity})`);
+                
+                // Try to match this to a menu item
+                for (const menuItem of menuItems) {
+                  const menuNameLower = menuItem.name.toLowerCase();
+                  const itemNameLower = itemName.toLowerCase();
+                  
+                  // Check if menu item name contains the mentioned item or vice versa
+                  if (menuNameLower.includes(itemNameLower) || itemNameLower.includes(menuNameLower)) {
+                    itemsWithIds.push({
+                      menu_item_id: menuItem.id,
+                      quantity: quantity
+                    });
+                    console.log(`✅ Fallback matched "${itemName}" to "${menuItem.name}" (qty: ${quantity})`);
+                    break;
+                  }
+                }
+              }
+            }
+          }
+          
+          // Pattern 2: "Got it, one [item]" or "one [item]" (if summary pattern didn't match)
+          if (itemsWithIds.length === 0) {
+            const patterns = [
+              /got it,?\s*(?:one|1|two|2|three|3|four|4|five|5)\s+([^.!?]+)/i,
+              /(?:one|1|two|2|three|3|four|4|five|5)\s+([^.!?]+?)(?:\s|,|\.|$)/i
+            ];
+            
+            for (const pattern of patterns) {
+              const match = content.match(pattern);
+              if (match) {
+                const mentionedItem = match[1].trim();
+                console.log(`🔍 Found mentioned item in assistant message: "${mentionedItem}"`);
+                
+                // Try to match this to a menu item
+                for (const menuItem of menuItems) {
+                  const menuNameLower = menuItem.name.toLowerCase();
+                  const mentionedLower = mentionedItem.toLowerCase();
+                  
+                  // Check if menu item name contains the mentioned item or vice versa
+                  if (menuNameLower.includes(mentionedLower) || mentionedLower.includes(menuNameLower)) {
+                    // Extract quantity if mentioned
+                    const qtyMatch = content.match(/(?:one|1|two|2|three|3|four|4|five|5)/i);
+                    let quantity = 1;
+                    if (qtyMatch) {
+                      const qtyText = qtyMatch[0].toLowerCase();
+                      if (qtyText.includes('two') || qtyText === '2') quantity = 2;
+                      else if (qtyText.includes('three') || qtyText === '3') quantity = 3;
+                      else if (qtyText.includes('four') || qtyText === '4') quantity = 4;
+                      else if (qtyText.includes('five') || qtyText === '5') quantity = 5;
+                    }
+                    
+                    itemsWithIds.push({
+                      menu_item_id: menuItem.id,
+                      quantity: quantity
+                    });
+                    console.log(`✅ Fallback matched "${mentionedItem}" to "${menuItem.name}" (qty: ${quantity})`);
+                    break; // Found a match, move to next message
+                  }
                 }
               }
             }
