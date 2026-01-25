@@ -7,6 +7,80 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+/**
+ * Remove duplicate phrases from AI response
+ * Prevents repetitive phrases like "let me know, let me know" or "okay, okay"
+ */
+function removeDuplicatePhrases(text) {
+  if (!text) return text;
+  
+  let cleaned = text;
+  
+  // 1. Collapse adjacent duplicate short-phrase repetitions (up to 5 words)
+  // Common fillers and phrases that get repeated
+  const commonPhrases = [
+    'let me know',
+    'okay',
+    'got it',
+    'right',
+    'sure',
+    'thanks',
+    'thank you',
+    'alright',
+    'i see',
+    'i understand'
+  ];
+  
+  for (const phrase of commonPhrases) {
+    // Match phrase with optional punctuation/whitespace, then same phrase again
+    const regex = new RegExp(`(\\b${phrase.replace(/\s+/g, '\\s+')}[,\\.\\s]*)\\1+`, 'gi');
+    cleaned = cleaned.replace(regex, '$1');
+  }
+  
+  // 2. Remove any 2-4 word substring repeated twice with minimal separation
+  // Pattern: word1 word2 ... wordN [short gap] word1 word2 ... wordN
+  const duplicatePattern = /\b(\w+(?:\s+\w+){0,3})\b\s*[,\.]?\s*\1\b/gi;
+  cleaned = cleaned.replace(duplicatePattern, '$1');
+  
+  // 3. Limit filler tokens - if more than 1 filler, keep only the first
+  const fillers = ['okay', 'got it', 'right', 'sure', 'thanks', 'alright'];
+  let fillerCount = 0;
+  const words = cleaned.split(/\s+/);
+  const filteredWords = [];
+  
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i].toLowerCase().replace(/[,\\.!?]/g, '');
+    if (fillers.includes(word)) {
+      fillerCount++;
+      if (fillerCount > 1) {
+        // Skip this filler
+        continue;
+      }
+    }
+    filteredWords.push(words[i]);
+  }
+  
+  cleaned = filteredWords.join(' ');
+  
+  // 4. Remove trailing filler duplicates
+  // If last 2-3 tokens are fillers that match sentence start, remove duplicates
+  const sentences = cleaned.split(/[.!?]+/).filter(s => s.trim());
+  if (sentences.length > 0) {
+    const lastSentence = sentences[sentences.length - 1].trim();
+    const lastWords = lastSentence.split(/\s+/).slice(-3).map(w => w.toLowerCase().replace(/[,\\.!?]/g, ''));
+    const firstWords = lastSentence.split(/\s+/).slice(0, 3).map(w => w.toLowerCase().replace(/[,\\.!?]/g, ''));
+    
+    // If last words match first words (filler repetition), remove the trailing ones
+    if (lastWords.length > 0 && firstWords.length > 0 && 
+        lastWords[0] === firstWords[0] && fillers.includes(lastWords[0])) {
+      const words = lastSentence.split(/\s+/);
+      cleaned = cleaned.replace(lastSentence, words.slice(0, -lastWords.length).join(' '));
+    }
+  }
+  
+  return cleaned.trim();
+}
+
 // Get menu items for context
 async function getMenuContext() {
   const { data, error } = await supabase
