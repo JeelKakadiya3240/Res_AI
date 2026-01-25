@@ -5,6 +5,12 @@ const { handleCustomerQuery, extractOrderFromConversation, detectIntent } = requ
 const { lookupMenuItem, validateMenuItemById } = require('../services/menuLookup');
 const { extractCustomerInfo } = require('../services/customerInfoExtractor');
 const { 
+  getMenuCategoriesResponse, 
+  getCategoryItemsResponse, 
+  getFullMenuResponse,
+  extractCategoryFromQuery 
+} = require('../services/menuResponses');
+const { 
   getCart, 
   addItemToCart, 
   getCartSummary, 
@@ -651,42 +657,49 @@ router.post('/handle-speech', async (req, res) => {
         clearCart(callSid);
         conversations.delete(callSid);
       }
+    } else if (userIntent === 'menu_inquiry') {
+      // FAST PATH: Menu inquiry - NO LLM CALL, use cached response
+      console.log('📋 Fast path: Menu inquiry (no LLM)');
+      
+      const response = await getFullMenuResponse();
+      conversationHistory.push({ role: 'assistant', content: response, intent: 'menu_inquiry' });
+      
+      if (conv) {
+        await saveMessageToDB(conv.id, 'assistant', response);
+      }
+      
+      // Instant response - no "Let me check" needed
+      sayNatural(twiml, response);
+      twiml.gather({
+        input: 'speech',
+        action: '/api/voice/handle-speech',
+        method: 'POST',
+        speechTimeout: 'auto',
+        bargeIn: true,
+        bargeInOnSpeech: true
+      });
+      
+      await saveConversationToDB(callSid, {
+        conversation_data: { messages: conversationHistory }
+      });
+      
     } else if (userIntent === 'category_inquiry') {
-      // Handle category-specific inquiries
-      const { getMenuItemsByCategory, formatMenuByCategoryForAI } = require('../services/menuCategories');
+      // FAST PATH: Category inquiry - NO LLM CALL, use cached response
+      console.log('📋 Fast path: Category inquiry (no LLM)');
       
-      // Extract category from user query
-      const categoryMatch = speechResult.match(/(?:what|show|tell|have).*(?:in|for|under).*(beverages?|drinks?|soft drinks?|lunch|dinner|appetizers?|desserts?|main course|bread|sides?|burgers?|pizza)/i);
+      // Try to extract category from query
+      const categoryName = extractCategoryFromQuery(speechResult);
       
-      if (categoryMatch) {
-        const categoryName = categoryMatch[1];
-        // Map common terms to actual category names
-        const categoryMap = {
-          'beverages': 'Beverage',
-          'drinks': 'Beverage',
-          'soft drinks': 'Beverage',
-          'lunch': 'Main Course',
-          'dinner': 'Main Course',
-          'appetizers': 'Appetizer',
-          'desserts': 'Dessert',
-          'main course': 'Main Course',
-          'bread': 'Bread',
-          'sides': 'Appetizer',
-          'burgers': 'Main Course',
-          'pizza': 'Main Course'
-        };
-        
-        const actualCategory = categoryMap[categoryName.toLowerCase()] || categoryName;
-        const categoryItems = await getMenuItemsByCategory(actualCategory);
-        const itemsText = formatMenuByCategoryForAI(categoryItems);
-        
-        const response = `In ${actualCategory}, we have... ${itemsText}. Would you like to order any of these?`;
+      if (categoryName) {
+        // Found specific category - get items for that category
+        const response = await getCategoryItemsResponse(categoryName);
         conversationHistory.push({ role: 'assistant', content: response, intent: 'category_inquiry' });
         
         if (conv) {
           await saveMessageToDB(conv.id, 'assistant', response);
         }
         
+        // Instant response - no "Let me check" needed
         sayNatural(twiml, response);
         twiml.gather({
           input: 'speech',
@@ -697,18 +710,16 @@ router.post('/handle-speech', async (req, res) => {
           bargeInOnSpeech: true
         });
       } else {
-        // Fallback to normal AI response
-        // Say "Let me check" immediately to fill processing time
-        sayNatural(twiml, 'Let me check that for you.');
-        
-        const aiResponse = await handleCustomerQuery(speechResult, conversationHistory);
-        conversationHistory.push({ role: 'assistant', content: aiResponse, intent: userIntent });
+        // No specific category found - show all categories
+        const response = await getMenuCategoriesResponse();
+        conversationHistory.push({ role: 'assistant', content: response, intent: 'category_inquiry' });
         
         if (conv) {
-          await saveMessageToDB(conv.id, 'assistant', aiResponse);
+          await saveMessageToDB(conv.id, 'assistant', response);
         }
         
-        sayNatural(twiml, aiResponse);
+        // Instant response - no "Let me check" needed
+        sayNatural(twiml, response);
         twiml.gather({
           input: 'speech',
           action: '/api/voice/handle-speech',
@@ -724,7 +735,7 @@ router.post('/handle-speech', async (req, res) => {
       });
       
     } else {
-      // Continue normal conversation (handles menu_inquiry, item_inquiry, angry_complaint, etc.)
+      // SLOW PATH: General questions, opinions, comparisons - USE LLM
       // Say "Let me check" immediately to fill processing time
       sayNatural(twiml, 'Let me check that for you.');
       
