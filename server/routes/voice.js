@@ -5,12 +5,6 @@ const { handleCustomerQuery, extractOrderFromConversation, detectIntent } = requ
 const { lookupMenuItem, validateMenuItemById } = require('../services/menuLookup');
 const { extractCustomerInfo } = require('../services/customerInfoExtractor');
 const { 
-  getMenuCategoriesResponse, 
-  getCategoryItemsResponse, 
-  getFullMenuResponse,
-  extractCategoryFromQuery 
-} = require('../services/menuResponses');
-const { 
   getCart, 
   addItemToCart, 
   getCartSummary, 
@@ -96,87 +90,52 @@ async function saveMessageToDB(conversationId, role, content) {
   }
 }
 
-// ========== Text Cleaning Helpers (prevent repetition) ==========
-const FILLERS = ['let me check', 'let me know', 'okay', 'got it', 'right', 'sure', 'thanks'];
-
-function collapseAdjacentRepeats(text) {
-  return text.replace(/(\b(?:\w+\b(?:\s+|[,.\-!?]*)){0,4}\w+\b)(?:[,\s]*\1)+/ig, '$1');
-}
-
-function removeLeadingFillerIfMatches(prevSpoken, newText) {
-  if (!prevSpoken || !newText) return newText;
-  const p = prevSpoken.toLowerCase();
-  let cleaned = newText;
-  for (const filler of FILLERS) {
-    const f = filler.toLowerCase();
-    if (p.trim().endsWith(f) && cleaned.trim().toLowerCase().startsWith(f)) {
-      cleaned = cleaned.replace(new RegExp('^\\s*' + f.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + '[,\\.\\-!\\s]*','i'), '');
-      break;
-    }
-  }
-  return cleaned.trim();
-}
-
-// Main cleaning function - call this before formatNaturalSpeech
-function cleanAssistantText(prevSpoken, rawText) {
-  if (!rawText) return '';
-  let s = String(rawText).replace(/\s+/g, ' ').trim();
-  s = collapseAdjacentRepeats(s);
-
-  // Keep only the first occurrence of any filler token
-  const fillerRegex = new RegExp('\\b(' + FILLERS.map(f => f.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|') +')\\b', 'ig');
-  const seen = [];
-  s = s.replace(fillerRegex, (m) => {
-    const lower = m.toLowerCase();
-    if (seen.includes(lower)) return '';
-    seen.push(lower);
-    return m;
-  }).replace(/\s{2,}/g, ' ').trim();
-
-  s = removeLeadingFillerIfMatches(prevSpoken || '', s);
-  // final collapse any tight repeated token
-  s = s.replace(/\b(\w+)\b(?:\s+\1\b)+/ig, '$1');
-  return s.trim();
-}
-
 // Helper function to format text for natural human-like speech with SSML
 function formatNaturalSpeech(text) {
   if (!text) return '';
-
-  // 1) Basic normalize & preserve user pause tokens
-  let s = String(text).trim();
-
-  // 2) Replace explicit pause token
-  s = s.replace(/\[\[PAUSE_SHORT\]\]/g, '<break time="200ms"/>');
-
-  // 3) Add moderate breaks only after sentence-ending punctuation (avoid comma breaks)
-  //    - Ellipsis: short long pause
-  s = s.replace(/\.{3}/g, '<break time="350ms"/>');
-  //    - Sentence end: 240ms
-  s = s.replace(/([.?!])\s+/g, '$1 <break time="240ms"/>');
-
-  // 4) Remove repeated breaks (avoid long sequences of pauses)
-  s = s.replace(/(<break time="\d+ms"\/>)(\s*<break time="\d+ms"\/>)+/g, '$1');
-
-  // 5) Trim extra whitespace then wrap in SSML with near-normal prosody
-  s = s.replace(/\s{2,}/g, ' ').trim();
-
-  // Use 100% (or 98%) for natural speed; keep pitch neutral
-  return `<speak><prosody rate="100%" pitch="+0st">${s}</prosody></speak>`;
+  
+  // First, replace [[PAUSE_SHORT]] tokens with SSML breaks
+  let formatted = text.replace(/\[\[PAUSE_SHORT\]\]/g, '<break time="220ms"/>');
+  
+  // Add natural pauses after punctuation for more human-like rhythm
+  formatted = formatted
+    .replace(/\.\.\./g, '<break time="400ms"/>') // Natural pause for ellipsis
+    .replace(/\. /g, '. <break time="300ms"/>') // Natural pause after sentences
+    .replace(/\? /g, '? <break time="350ms"/>') // Pause after questions
+    .replace(/! /g, '! <break time="300ms"/>') // Pause after exclamations
+    .replace(/, /g, ', <break time="200ms"/>'); // Brief pause after commas
+  
+  // Final check: remove duplicate breaks that are too close together
+  // If two breaks are within 500ms worth of content, remove the second
+  formatted = formatted.replace(/(<break time="\d+ms"\/>)\s*(?:\w+\s*){0,5}\1/g, '$1');
+  
+  // Wrap in SSML with prosody for natural speech (slower rate for clarity)
+  return `<speak>
+    <prosody rate="85%" pitch="+0st">
+      ${formatted}
+    </prosody>
+  </speak>`;
 }
 
 // Helper function to say text with human-like voice
 function sayNatural(twiml, text, options = {}) {
-  // choose preferred Polly voice if available; fallback to 'alice' if Polly unavailable
-  const prefer = options.voice || 'polly.Kendra'; // or 'polly.Joanna'
+  // Use Twilio's built-in female voice (always available) or Amazon Polly
+  // Built-in Twilio voices (always available):
+  // - alice (female, US English) - DEFAULT - always works
+  // - man (male, US English)
+  // - woman (female, US English)
+  // Amazon Polly voices (premium, may not be available in all regions):
+  // - polly.Joanna (US English, female, neural)
+  // - polly.Kendra (US English, female, neural)
+  // - polly.Salli (US English, female, standard)
+  const voice = options.voice || 'alice'; // Built-in female voice (always available)
   const language = options.language || 'en-US';
-
-  try {
-    twiml.say({ voice: prefer, language }, formatNaturalSpeech(text));
-  } catch (err) {
-    // fallback in case Polly voice not enabled for account
-    twiml.say({ voice: 'alice', language }, formatNaturalSpeech(text));
-  }
+  
+  // Use SSML for more natural speech with pauses and prosody
+  twiml.say({
+    voice: voice,
+    language: language
+  }, formatNaturalSpeech(text));
 }
 
 // Handle incoming call
@@ -693,49 +652,42 @@ router.post('/handle-speech', async (req, res) => {
         clearCart(callSid);
         conversations.delete(callSid);
       }
-    } else if (userIntent === 'menu_inquiry') {
-      // FAST PATH: Menu inquiry - NO LLM CALL, use cached response
-      console.log('📋 Fast path: Menu inquiry (no LLM)');
-      
-      const response = await getFullMenuResponse();
-      conversationHistory.push({ role: 'assistant', content: response, intent: 'menu_inquiry' });
-      
-      if (conv) {
-        await saveMessageToDB(conv.id, 'assistant', response);
-      }
-      
-      // Instant response - no "Let me check" needed
-      sayNatural(twiml, response);
-      twiml.gather({
-        input: 'speech',
-        action: '/api/voice/handle-speech',
-        method: 'POST',
-        speechTimeout: 'auto',
-        bargeIn: true,
-        bargeInOnSpeech: true
-      });
-      
-      await saveConversationToDB(callSid, {
-        conversation_data: { messages: conversationHistory }
-      });
-      
     } else if (userIntent === 'category_inquiry') {
-      // FAST PATH: Category inquiry - NO LLM CALL, use cached response
-      console.log('📋 Fast path: Category inquiry (no LLM)');
+      // Handle category-specific inquiries
+      const { getMenuItemsByCategory, formatMenuByCategoryForAI } = require('../services/menuCategories');
       
-      // Try to extract category from query
-      const categoryName = extractCategoryFromQuery(speechResult);
+      // Extract category from user query
+      const categoryMatch = speechResult.match(/(?:what|show|tell|have).*(?:in|for|under).*(beverages?|drinks?|soft drinks?|lunch|dinner|appetizers?|desserts?|main course|bread|sides?|burgers?|pizza)/i);
       
-      if (categoryName) {
-        // Found specific category - get items for that category
-        const response = await getCategoryItemsResponse(categoryName);
+      if (categoryMatch) {
+        const categoryName = categoryMatch[1];
+        // Map common terms to actual category names
+        const categoryMap = {
+          'beverages': 'Beverage',
+          'drinks': 'Beverage',
+          'soft drinks': 'Beverage',
+          'lunch': 'Main Course',
+          'dinner': 'Main Course',
+          'appetizers': 'Appetizer',
+          'desserts': 'Dessert',
+          'main course': 'Main Course',
+          'bread': 'Bread',
+          'sides': 'Appetizer',
+          'burgers': 'Main Course',
+          'pizza': 'Main Course'
+        };
+        
+        const actualCategory = categoryMap[categoryName.toLowerCase()] || categoryName;
+        const categoryItems = await getMenuItemsByCategory(actualCategory);
+        const itemsText = formatMenuByCategoryForAI(categoryItems);
+        
+        const response = `In ${actualCategory}, we have... ${itemsText}. Would you like to order any of these?`;
         conversationHistory.push({ role: 'assistant', content: response, intent: 'category_inquiry' });
         
         if (conv) {
           await saveMessageToDB(conv.id, 'assistant', response);
         }
         
-        // Instant response - no "Let me check" needed
         sayNatural(twiml, response);
         twiml.gather({
           input: 'speech',
@@ -746,16 +698,18 @@ router.post('/handle-speech', async (req, res) => {
           bargeInOnSpeech: true
         });
       } else {
-        // No specific category found - show all categories
-        const response = await getMenuCategoriesResponse();
-        conversationHistory.push({ role: 'assistant', content: response, intent: 'category_inquiry' });
+        // Fallback to normal AI response
+        // Say "Let me check" immediately to fill processing time
+        sayNatural(twiml, 'Let me check that for you.');
+        
+        const aiResponse = await handleCustomerQuery(speechResult, conversationHistory);
+        conversationHistory.push({ role: 'assistant', content: aiResponse, intent: userIntent });
         
         if (conv) {
-          await saveMessageToDB(conv.id, 'assistant', response);
+          await saveMessageToDB(conv.id, 'assistant', aiResponse);
         }
         
-        // Instant response - no "Let me check" needed
-        sayNatural(twiml, response);
+        sayNatural(twiml, aiResponse);
         twiml.gather({
           input: 'speech',
           action: '/api/voice/handle-speech',
@@ -771,21 +725,17 @@ router.post('/handle-speech', async (req, res) => {
       });
       
     } else {
-      // SLOW PATH: General questions, opinions, comparisons - USE LLM
+      // Continue normal conversation (handles menu_inquiry, item_inquiry, angry_complaint, etc.)
       // Say "Let me check" immediately to fill processing time
-      const preCheckMessage = 'Let me check that for you.';
-      sayNatural(twiml, preCheckMessage);
+      sayNatural(twiml, 'Let me check that for you.');
       
       // Process AI response (this takes time)
       const aiResponse = await handleCustomerQuery(speechResult, conversationHistory);
       
-      // Clean AI response to remove repetition with pre-check message
-      const cleanedResponse = cleanAssistantText(preCheckMessage, aiResponse);
-      
       // Create response object with intent
       const aiResponseWithIntent = {
         role: 'assistant',
-        content: cleanedResponse,
+        content: aiResponse,
         intent: userIntent
       };
       
@@ -794,7 +744,7 @@ router.post('/handle-speech', async (req, res) => {
       
       // Save AI response to DB
       if (conv) {
-        await saveMessageToDB(conv.id, 'assistant', cleanedResponse);
+        await saveMessageToDB(conv.id, 'assistant', aiResponse);
       }
       
       // Update conversation data in DB
@@ -802,8 +752,8 @@ router.post('/handle-speech', async (req, res) => {
         conversation_data: { messages: conversationHistory }
       });
       
-      // Continue conversation with natural voice (using cleaned response)
-      sayNatural(twiml, cleanedResponse);
+      // Continue conversation with natural voice
+      sayNatural(twiml, aiResponse);
       twiml.gather({
         input: 'speech',
         action: '/api/voice/handle-speech',
