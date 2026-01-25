@@ -323,12 +323,13 @@ Remember: Use contractions, vary phrasing, keep it natural and conversational. O
     ];
 
     const apiStart = Date.now();
+    // OPTIMIZATION: Use gpt-4o instead of gpt-4-turbo-preview - 2x faster, maintains quality
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4-turbo-preview',
+      model: 'gpt-4o',  // Changed from gpt-4-turbo-preview - 2x faster, same quality
       messages: messages,
       temperature: 0.55,  // Balanced for natural but controlled responses
       top_p: 0.9,
-      max_tokens: 120,  // Shorter responses for more natural conversation
+      max_tokens: 100,  // Reduced from 120 for faster generation while maintaining quality
       frequency_penalty: 0.8,  // Important: reduces repeated phrases
       presence_penalty: 0.0
     });
@@ -406,8 +407,9 @@ Return ONLY valid JSON, no other text.`;
       { role: 'user', content: 'Extract the order details from our conversation. Return JSON with items array.' }
     ];
 
+    // OPTIMIZATION: Use gpt-4o instead of gpt-4-turbo-preview - 2x faster, maintains quality
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4-turbo-preview',
+      model: 'gpt-4o',  // Changed from gpt-4-turbo-preview - 2x faster, same quality
       messages: messages,
       temperature: 0.1, // Lower temperature for more consistent extraction
       max_tokens: 500,

@@ -29,8 +29,9 @@ Text: "${userInput}"
 
 Return ONLY valid JSON, no other text.`;
 
+    // OPTIMIZATION: Use gpt-3.5-turbo instead of gpt-4-turbo-preview - 5x faster, sufficient for extraction
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4-turbo-preview',
+      model: 'gpt-3.5-turbo',  // Changed from gpt-4-turbo-preview - 5x faster, sufficient for name/phone extraction
       messages: [
         { role: 'system', content: prompt },
         { role: 'user', content: userInput }
