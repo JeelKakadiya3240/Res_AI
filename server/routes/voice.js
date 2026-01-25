@@ -96,51 +96,87 @@ async function saveMessageToDB(conversationId, role, content) {
   }
 }
 
+// ========== Text Cleaning Helpers (prevent repetition) ==========
+const FILLERS = ['let me check', 'let me know', 'okay', 'got it', 'right', 'sure', 'thanks'];
+
+function collapseAdjacentRepeats(text) {
+  return text.replace(/(\b(?:\w+\b(?:\s+|[,.\-!?]*)){0,4}\w+\b)(?:[,\s]*\1)+/ig, '$1');
+}
+
+function removeLeadingFillerIfMatches(prevSpoken, newText) {
+  if (!prevSpoken || !newText) return newText;
+  const p = prevSpoken.toLowerCase();
+  let cleaned = newText;
+  for (const filler of FILLERS) {
+    const f = filler.toLowerCase();
+    if (p.trim().endsWith(f) && cleaned.trim().toLowerCase().startsWith(f)) {
+      cleaned = cleaned.replace(new RegExp('^\\s*' + f.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + '[,\\.\\-!\\s]*','i'), '');
+      break;
+    }
+  }
+  return cleaned.trim();
+}
+
+// Main cleaning function - call this before formatNaturalSpeech
+function cleanAssistantText(prevSpoken, rawText) {
+  if (!rawText) return '';
+  let s = String(rawText).replace(/\s+/g, ' ').trim();
+  s = collapseAdjacentRepeats(s);
+
+  // Keep only the first occurrence of any filler token
+  const fillerRegex = new RegExp('\\b(' + FILLERS.map(f => f.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|') +')\\b', 'ig');
+  const seen = [];
+  s = s.replace(fillerRegex, (m) => {
+    const lower = m.toLowerCase();
+    if (seen.includes(lower)) return '';
+    seen.push(lower);
+    return m;
+  }).replace(/\s{2,}/g, ' ').trim();
+
+  s = removeLeadingFillerIfMatches(prevSpoken || '', s);
+  // final collapse any tight repeated token
+  s = s.replace(/\b(\w+)\b(?:\s+\1\b)+/ig, '$1');
+  return s.trim();
+}
+
 // Helper function to format text for natural human-like speech with SSML
 function formatNaturalSpeech(text) {
   if (!text) return '';
-  
-  // First, replace [[PAUSE_SHORT]] tokens with SSML breaks
-  let formatted = text.replace(/\[\[PAUSE_SHORT\]\]/g, '<break time="220ms"/>');
-  
-  // Add natural pauses after punctuation for more human-like rhythm
-  formatted = formatted
-    .replace(/\.\.\./g, '<break time="400ms"/>') // Natural pause for ellipsis
-    .replace(/\. /g, '. <break time="300ms"/>') // Natural pause after sentences
-    .replace(/\? /g, '? <break time="350ms"/>') // Pause after questions
-    .replace(/! /g, '! <break time="300ms"/>') // Pause after exclamations
-    .replace(/, /g, ', <break time="200ms"/>'); // Brief pause after commas
-  
-  // Final check: remove duplicate breaks that are too close together
-  // If two breaks are within 500ms worth of content, remove the second
-  formatted = formatted.replace(/(<break time="\d+ms"\/>)\s*(?:\w+\s*){0,5}\1/g, '$1');
-  
-  // Wrap in SSML with prosody for natural speech
-  // For Amazon Polly, rate options: "x-slow" (50%), "slow" (75%), "medium" (100%), "fast" (150%), "x-fast" (200%)
-  // Using "medium" = 100% speed (normal, natural pace)
-  return `<speak>
-    <prosody rate="medium" pitch="+0st">
-      ${formatted}
-    </prosody>
-  </speak>`;
+
+  // 1) Basic normalize & preserve user pause tokens
+  let s = String(text).trim();
+
+  // 2) Replace explicit pause token
+  s = s.replace(/\[\[PAUSE_SHORT\]\]/g, '<break time="200ms"/>');
+
+  // 3) Add moderate breaks only after sentence-ending punctuation (avoid comma breaks)
+  //    - Ellipsis: short long pause
+  s = s.replace(/\.{3}/g, '<break time="350ms"/>');
+  //    - Sentence end: 240ms
+  s = s.replace(/([.?!])\s+/g, '$1 <break time="240ms"/>');
+
+  // 4) Remove repeated breaks (avoid long sequences of pauses)
+  s = s.replace(/(<break time="\d+ms"\/>)(\s*<break time="\d+ms"\/>)+/g, '$1');
+
+  // 5) Trim extra whitespace then wrap in SSML with near-normal prosody
+  s = s.replace(/\s{2,}/g, ' ').trim();
+
+  // Use 100% (or 98%) for natural speed; keep pitch neutral
+  return `<speak><prosody rate="100%" pitch="+0st">${s}</prosody></speak>`;
 }
 
 // Helper function to say text with human-like voice
 function sayNatural(twiml, text, options = {}) {
-  // Use Amazon Polly voice for SSML support (prosody rate changes work with Polly)
-  // Amazon Polly voices (premium, supports full SSML):
-  // - polly.Joanna (US English, female, neural) - DEFAULT - supports SSML prosody
-  // - polly.Kendra (US English, female, neural)
-  // - polly.Salli (US English, female, standard)
-  // Built-in Twilio voices (alice, man, woman) don't support SSML prosody rate changes
-  const voice = options.voice || 'polly.Joanna'; // Amazon Polly female voice (supports SSML)
+  // choose preferred Polly voice if available; fallback to 'alice' if Polly unavailable
+  const prefer = options.voice || 'polly.Kendra'; // or 'polly.Joanna'
   const language = options.language || 'en-US';
-  
-  // Use SSML for more natural speech with pauses and prosody
-  twiml.say({
-    voice: voice,
-    language: language
-  }, formatNaturalSpeech(text));
+
+  try {
+    twiml.say({ voice: prefer, language }, formatNaturalSpeech(text));
+  } catch (err) {
+    // fallback in case Polly voice not enabled for account
+    twiml.say({ voice: 'alice', language }, formatNaturalSpeech(text));
+  }
 }
 
 // Handle incoming call
@@ -737,15 +773,19 @@ router.post('/handle-speech', async (req, res) => {
     } else {
       // SLOW PATH: General questions, opinions, comparisons - USE LLM
       // Say "Let me check" immediately to fill processing time
-      sayNatural(twiml, 'Let me check that for you.');
+      const preCheckMessage = 'Let me check that for you.';
+      sayNatural(twiml, preCheckMessage);
       
       // Process AI response (this takes time)
       const aiResponse = await handleCustomerQuery(speechResult, conversationHistory);
       
+      // Clean AI response to remove repetition with pre-check message
+      const cleanedResponse = cleanAssistantText(preCheckMessage, aiResponse);
+      
       // Create response object with intent
       const aiResponseWithIntent = {
         role: 'assistant',
-        content: aiResponse,
+        content: cleanedResponse,
         intent: userIntent
       };
       
@@ -754,7 +794,7 @@ router.post('/handle-speech', async (req, res) => {
       
       // Save AI response to DB
       if (conv) {
-        await saveMessageToDB(conv.id, 'assistant', aiResponse);
+        await saveMessageToDB(conv.id, 'assistant', cleanedResponse);
       }
       
       // Update conversation data in DB
@@ -762,8 +802,8 @@ router.post('/handle-speech', async (req, res) => {
         conversation_data: { messages: conversationHistory }
       });
       
-      // Continue conversation with natural voice
-      sayNatural(twiml, aiResponse);
+      // Continue conversation with natural voice (using cleaned response)
+      sayNatural(twiml, cleanedResponse);
       twiml.gather({
         input: 'speech',
         action: '/api/voice/handle-speech',
