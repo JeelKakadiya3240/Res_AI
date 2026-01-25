@@ -111,7 +111,7 @@ function formatNaturalSpeech(text) {
   
   // Wrap in SSML with prosody for natural speech (slower rate for clarity)
   return `<speak>
-    <prosody rate="85%" pitch="+0st">
+    <prosody rate="65%" pitch="+0st">
       ${formatted}
     </prosody>
   </speak>`;
