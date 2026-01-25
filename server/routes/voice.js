@@ -110,13 +110,14 @@ function formatNaturalSpeech(text) {
 
 // Helper function to say text with human-like voice
 function sayNatural(twiml, text, options = {}) {
-  // Use Amazon Polly neural voice - mature, warm female voice
-  // Options: 
-  // - polly.Ruth (mature female, warm tone) - preferred
-  // - polly.Joanna (younger female, natural) - fallback
-  // - polly.Amy (British, mature) - alternative
-  // Note: If polly.Ruth is not available in your region, it will fallback automatically
-  const voice = options.voice || 'polly.Ruth'; // Mature, warm female voice
+  // Use Amazon Polly neural voice - warm, natural female voice
+  // Available female voices:
+  // - polly.Joanna (US English, female, neural) - natural and clear
+  // - polly.Kendra (US English, female, neural) - warm and friendly
+  // - polly.Kimberly (US English, female, neural) - professional
+  // - polly.Amy (British English, female, neural) - British accent
+  // - polly.Salli (US English, female, standard) - widely available
+  const voice = options.voice || 'polly.Joanna'; // Natural female voice (widely available)
   const language = options.language || 'en-US';
   
   // Use SSML for more natural speech with pauses and prosody
