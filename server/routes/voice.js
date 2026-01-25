@@ -142,27 +142,27 @@ function formatNaturalSpeech(text) {
   if (!text) return '';
   
   // First, replace [[PAUSE_SHORT]] tokens with SSML breaks
-  let formatted = text.replace(/\[\[PAUSE_SHORT\]\]/g, '<break time="220ms"/>');
+  let formatted = text.replace(/\[\[PAUSE_SHORT\]\]/g, '<break time="300ms"/>');
   
-  // Add natural pauses after punctuation for more human-like rhythm
+  // Add natural pauses after punctuation for more human-like rhythm (longer pauses for slower pace)
   formatted = formatted
-    .replace(/\.\.\./g, '<break time="400ms"/>') // Natural pause for ellipsis
-    .replace(/\. /g, '. <break time="300ms"/>') // Natural pause after sentences
-    .replace(/\? /g, '? <break time="350ms"/>') // Pause after questions
-    .replace(/! /g, '! <break time="300ms"/>') // Pause after exclamations
-    .replace(/, /g, ', <break time="200ms"/>'); // Brief pause after commas
+    .replace(/\.\.\./g, '<break time="500ms"/>') // Natural pause for ellipsis
+    .replace(/\. /g, '. <break time="400ms"/>') // Natural pause after sentences
+    .replace(/\? /g, '? <break time="450ms"/>') // Pause after questions
+    .replace(/! /g, '! <break time="400ms"/>') // Pause after exclamations
+    .replace(/, /g, ', <break time="300ms"/>'); // Brief pause after commas
   
   // Final check: remove duplicate breaks that are too close together
   // If two breaks are within 500ms worth of content, remove the second
   formatted = formatted.replace(/(<break time="\d+ms"\/>)\s*(?:\w+\s*){0,5}\1/g, '$1');
   
   // Wrap in SSML with prosody for natural speech (slower rate for clarity)
-  // Using percentage rate: 35% = 65% slower than normal (100%)
+  // Using percentage rate: 20% = 80% slower than normal (100%)
   // Options: x-slow, slow, medium, fast, x-fast (presets)
   // Or percentage: 20-200% (100% = normal speed)
   // Note: SSML prosody only works with Amazon Polly voices, not built-in Twilio voices
   return `<speak>
-    <prosody rate="25%">
+    <prosody rate="20%">
       ${formatted}
     </prosody>
   </speak>`;
@@ -178,6 +178,12 @@ function sayNatural(twiml, text, options = {}) {
   // - polly.Salli (US English, female, standard)
   const voice = options.voice || 'polly.Joanna'; // Amazon Polly voice with SSML support
   const language = options.language || 'en-US';
+  
+  // Add a brief pause before speaking to make it feel more natural (like thinking)
+  // This makes the conversation feel less rushed
+  if (options.addPauseBefore !== false) {
+    twiml.pause({ length: 1 }); // 1 second pause before response
+  }
   
   // Use SSML for more natural speech with pauses and prosody
   // Note: SSML prosody rate only works with Amazon Polly voices
@@ -322,8 +328,9 @@ router.post('/handle-speech', async (req, res) => {
     // Fast paths (menu lookup, etc.) don't need it
     if (!shouldSkipLetMeCheck) {
       // Say "Let me check" only for slow AI responses (general_question, angry_complaint, etc.)
+      // No pause before "Let me check" - it should be immediate
       const immediateResponseStart = Date.now();
-      sayNatural(twiml, 'Let me check that for you.');
+      sayNatural(twiml, 'Let me check that for you.', { addPauseBefore: false });
       console.log(`⏱️  [PERF] "Let me check" said at: ${immediateResponseStart - overallStart}ms from request start`);
     }
     
