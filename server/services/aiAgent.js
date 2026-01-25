@@ -102,13 +102,19 @@ async function handleCustomerQuery(query, conversationHistory = []) {
     const categories = await getMenuCategories();
     const categoriesText = formatCategoriesForAI(categories);
 
-    const systemPrompt = `You are a real, calm, helpful restaurant staff member taking phone orders. Respond like a natural human - use conversational English with contractions, short sentences, and clear structure. ALWAYS listen and respond to interruptions - if customer speaks while you're explaining, STOP and address what they said.
+    const systemPrompt = `You are a single, consistent, human-like assistant persona named "Maya". Speak in natural, conversational English with contractions, short sentences (1–3 sentences for most replies), and warm politeness. 
 
-TONE & BEHAVIOR RULES:
+CRITICAL - NO REPETITION:
+- Avoid repeating words, phrases, or short fillers consecutively (e.g., NEVER output "let me know, let me know" or "okay, okay")
+- Do not echo the user's last short phrase back-to-back
+- If you need to confirm, use a single clear confirmation sentence (e.g., "Got it — one burger. Anything else?")
+- Limit use of fillers ("Okay," "Got it," "Right—") to at most once per reply and never immediately before or after the same phrase
+- When producing text that will be spoken, prefer short, clear sentences and mark places where a short pause would help by inserting the token [[PAUSE_SHORT]]
+- Do not include SSML tags yourself. Output plain text only; the caller will convert [[PAUSE_SHORT]] into SSML breaks
+
+TONE & BEHAVIOR:
 - Use natural conversational English with contractions ("I'm", "we've", "that's", "don't")
-- Keep most replies concise (1-4 sentences), expand only when needed
-- Occasionally (no more than ~20% of replies) add a light human filler like "Okay," "Got it," or "Right—" before important sentences
-- Vary phrasing slightly between similar replies to avoid repetition
+- Keep most replies concise (1-3 sentences), expand only when needed
 - Be polite, warm, and empathetic when customer is confused or frustrated
 - Never claim personal emotions or experiences
 - Ask brief clarifying questions when uncertain instead of making assumptions
@@ -192,11 +198,19 @@ Remember: Use contractions, vary phrasing, keep it natural and conversational. O
     const completion = await openai.chat.completions.create({
       model: 'gpt-4-turbo-preview',
       messages: messages,
-      temperature: 0.8,
-      max_tokens: 150  // Shorter responses for more natural conversation
+      temperature: 0.55,  // Balanced for natural but controlled responses
+      top_p: 0.9,
+      max_tokens: 120,  // Shorter responses for more natural conversation
+      frequency_penalty: 0.8,  // Important: reduces repeated phrases
+      presence_penalty: 0.0
     });
 
-    return completion.choices[0].message.content;
+    let response = completion.choices[0].message.content;
+    
+    // Post-process to remove duplicate phrases
+    response = removeDuplicatePhrases(response);
+    
+    return response;
   } catch (error) {
     console.error('AI Agent Error:', error);
     return "I'm sorry, I'm having trouble processing your request right now. Please try again later.";

@@ -92,17 +92,26 @@ async function saveMessageToDB(conversationId, role, content) {
 
 // Helper function to format text for natural human-like speech with SSML
 function formatNaturalSpeech(text) {
+  if (!text) return '';
+  
+  // First, replace [[PAUSE_SHORT]] tokens with SSML breaks
+  let formatted = text.replace(/\[\[PAUSE_SHORT\]\]/g, '<break time="220ms"/>');
+  
   // Add natural pauses after punctuation for more human-like rhythm
-  let formatted = text
+  formatted = formatted
     .replace(/\.\.\./g, '<break time="400ms"/>') // Natural pause for ellipsis
     .replace(/\. /g, '. <break time="300ms"/>') // Natural pause after sentences
     .replace(/\? /g, '? <break time="350ms"/>') // Pause after questions
     .replace(/! /g, '! <break time="300ms"/>') // Pause after exclamations
     .replace(/, /g, ', <break time="200ms"/>'); // Brief pause after commas
   
+  // Final check: remove duplicate breaks that are too close together
+  // If two breaks are within 500ms worth of content, remove the second
+  formatted = formatted.replace(/(<break time="\d+ms"\/>)\s*(?:\w+\s*){0,5}\1/g, '$1');
+  
   // Wrap in SSML with prosody for natural speech (medium rate, warmer tone)
   return `<speak>
-    <prosody rate="medium" pitch="low" volume="medium">
+    <prosody rate="100%" pitch="+0st">
       ${formatted}
     </prosody>
   </speak>`;
