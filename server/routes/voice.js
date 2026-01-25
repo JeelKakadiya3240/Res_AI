@@ -2,6 +2,17 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const { handleCustomerQuery, extractOrderFromConversation, detectIntent } = require('../services/aiAgent');
+const { lookupMenuItem, validateMenuItemById } = require('../services/menuLookup');
+const { 
+  getCart, 
+  addItemToCart, 
+  getCartSummary, 
+  updateCartStatus, 
+  clearCart, 
+  getCartItemsForOrder, 
+  validateCartItems,
+  CartStatus 
+} = require('../services/cartState');
 require('dotenv').config();
 
 // Optional Twilio setup - only initialize if credentials are provided
@@ -200,25 +211,163 @@ router.post('/handle-speech', async (req, res) => {
     };
     conversationHistory[conversationHistory.length - 1] = userMessageWithIntent;
     
-    // If intent is to confirm/place order, process order creation
-    if (userIntent === 'confirm_order') {
+    // Get cart state
+    const cart = getCart(callSid);
+    
+    // STATE MACHINE: Handle different intents with proper flow
+    if (userIntent === 'order_item') {
+      // STATE: ADDING_ITEMS - Parse → Normalize → Lookup → Validate → Add to Cart
+      console.log('🛒 Processing order_item intent...');
+      
+      // Extract quantity and item name from user input
+      const qtyMatch = speechResult.match(/\b(one|1|two|2|three|3|four|4|five|5|\d+)\b/i);
+      const quantity = qtyMatch ? (parseInt(qtyMatch[1]) || (qtyMatch[1].toLowerCase().includes('one') ? 1 : 
+        qtyMatch[1].toLowerCase().includes('two') ? 2 : 
+        qtyMatch[1].toLowerCase().includes('three') ? 3 : 
+        qtyMatch[1].toLowerCase().includes('four') ? 4 : 
+        qtyMatch[1].toLowerCase().includes('five') ? 5 : 1)) : 1;
+      
+      // Remove quantity from text to get item name
+      const itemText = speechResult.replace(/\b(one|1|two|2|three|3|four|4|five|5|\d+)\b/gi, '').trim();
+      
+      // Lookup menu item with fuzzy matching
+      const lookupResult = await lookupMenuItem(itemText, quantity);
+      
+      // Log lookup result
+      console.log('📊 Lookup result:', JSON.stringify({
+        raw_text: itemText,
+        success: lookupResult.success,
+        action: lookupResult.action,
+        menu_id: lookupResult.menu_id,
+        menu_name: lookupResult.menu_name,
+        confidence: lookupResult.match_confidence
+      }, null, 2));
+      
+      if (lookupResult.success && lookupResult.action === 'auto_match') {
+        // High confidence - auto-add to cart
+        addItemToCart(callSid, {
+          raw_text: itemText,
+          normalized_text: lookupResult.normalized_text,
+          menu_id: lookupResult.menu_id,
+          menu_name: lookupResult.menu_name,
+          price: lookupResult.price,
+          quantity: quantity,
+          match_confidence: lookupResult.match_confidence
+        });
+        
+        updateCartStatus(callSid, CartStatus.ADDING_ITEMS);
+        
+        const response = `Got it, ${quantity} ${lookupResult.menu_name}. Anything else?`;
+        conversationHistory.push({ role: 'assistant', content: response, intent: 'order_item_added' });
+        
+        if (conv) {
+          await saveMessageToDB(conv.id, 'assistant', response);
+        }
+        
+        sayNatural(twiml, response);
+        twiml.gather({
+          input: 'speech',
+          action: '/api/voice/handle-speech',
+          method: 'POST',
+          speechTimeout: 'auto'
+        });
+      } else if (lookupResult.action === 'ask_clarification') {
+        // Ambiguous - ask for clarification
+        const options = lookupResult.candidates.slice(0, 2).map(c => c.menu_name).join(' or ');
+        const response = `Did you mean ${options}?`;
+        conversationHistory.push({ role: 'assistant', content: response, intent: 'clarification_needed' });
+        
+        if (conv) {
+          await saveMessageToDB(conv.id, 'assistant', response);
+        }
+        
+        sayNatural(twiml, response);
+        twiml.gather({
+          input: 'speech',
+          action: '/api/voice/handle-speech',
+          method: 'POST',
+          speechTimeout: 'auto'
+        });
+      } else {
+        // Low confidence - show menu or ask
+        const topItems = lookupResult.candidates.slice(0, 3).map(c => c.menu_name).join(', ');
+        const response = `I couldn't find "${itemText}" on our menu. Did you mean ${topItems}? Or would you like to hear our menu?`;
+        conversationHistory.push({ role: 'assistant', content: response, intent: 'item_not_found' });
+        
+        if (conv) {
+          await saveMessageToDB(conv.id, 'assistant', response);
+        }
+        
+        sayNatural(twiml, response);
+        twiml.gather({
+          input: 'speech',
+          action: '/api/voice/handle-speech',
+          method: 'POST',
+          speechTimeout: 'auto'
+        });
+      }
+      
+      // Update conversation data
+      await saveConversationToDB(callSid, {
+        conversation_data: { messages: conversationHistory }
+      });
+      
+    } else if (userIntent === 'general_question' && cart.status === CartStatus.ADDING_ITEMS) {
+      // User said "No" to "Anything else?" - move to CONFIRMATION
+      const summary = getCartSummary(callSid);
+      
+      if (summary && summary.items.length > 0) {
+        updateCartStatus(callSid, CartStatus.CONFIRMATION);
+        
+        const response = `So your order is: ${summary.items_text}. Is that correct?`;
+        conversationHistory.push({ role: 'assistant', content: response, intent: 'order_summary' });
+        
+        if (conv) {
+          await saveMessageToDB(conv.id, 'assistant', response);
+        }
+        
+        sayNatural(twiml, response);
+        twiml.gather({
+          input: 'speech',
+          action: '/api/voice/handle-speech',
+          method: 'POST',
+          speechTimeout: 'auto'
+        });
+      } else {
+        // No items in cart - ask what they want
+        const response = 'What would you like to order?';
+        conversationHistory.push({ role: 'assistant', content: response });
+        
+        if (conv) {
+          await saveMessageToDB(conv.id, 'assistant', response);
+        }
+        
+        sayNatural(twiml, response);
+        twiml.gather({
+          input: 'speech',
+          action: '/api/voice/handle-speech',
+          method: 'POST',
+          speechTimeout: 'auto'
+        });
+      }
+      
+      await saveConversationToDB(callSid, {
+        conversation_data: { messages: conversationHistory }
+      });
+      
+    } else if (userIntent === 'confirm_order') {
+      // STATE: PLACING_ORDER - Use stored cart items with canonical menu IDs
       console.log('🔔 Order confirmation intent detected - processing order creation');
-      console.log('📝 Full conversation history:', JSON.stringify(conversationHistory, null, 2));
+      updateCartStatus(callSid, CartStatus.PLACING_ORDER);
       
-      // Extract order details from ENTIRE conversation
-      console.log('📦 Extracting order from conversation...');
-      console.log('📝 Conversation history for extraction:', JSON.stringify(
-        conversationHistory.map(m => ({ role: m.role, content: m.content })),
-        null, 2
-      ));
+      // Get cart items (already validated with canonical menu IDs)
+      const cartItems = getCartItemsForOrder(callSid);
+      console.log('🛒 Cart items for order:', JSON.stringify(cartItems, null, 2));
       
-      const orderData = await extractOrderFromConversation(conversationHistory);
-      console.log('📦 Extracted order data:', JSON.stringify(orderData, null, 2));
-      
-      if (!orderData) {
-        console.error('❌ Order extraction returned null');
-        const errorMessage = 'I couldn\'t extract your order details. Could you please tell me what you would like to order?';
-        conversationHistory.push({ role: 'assistant', content: errorMessage, intent: 'order_extraction_failed' });
+      if (!cartItems || cartItems.length === 0) {
+        console.error('❌ No items in cart');
+        const errorMessage = 'I don\'t see any items in your order. What would you like to order?';
+        conversationHistory.push({ role: 'assistant', content: errorMessage, intent: 'empty_cart' });
         
         if (conv) {
           await saveMessageToDB(conv.id, 'assistant', errorMessage);
@@ -235,161 +384,22 @@ router.post('/handle-speech', async (req, res) => {
         return res.send(twiml.toString());
       }
       
-      if (orderData && orderData.items && orderData.items.length > 0) {
-        // Calculate total amount and prepare order items
-        let totalAmount = 0;
-        const orderItems = [];
-
-        for (const item of orderData.items) {
-          const { data: menuItem, error: menuError } = await supabase
-            .from('menu_items')
-            .select('price, name')
-            .eq('id', item.menu_item_id)
-            .single();
-
-          if (menuError || !menuItem) {
-            continue; // Skip invalid items
-          }
-
-          const itemTotal = parseFloat(menuItem.price) * item.quantity;
-          totalAmount += itemTotal;
-
-          orderItems.push({
-            menu_item_id: item.menu_item_id,
-            quantity: item.quantity,
-            price: menuItem.price,
-            special_instructions: item.special_instructions || null
-          });
-        }
-
-        if (orderItems.length === 0) {
-          console.error('❌ No valid items found after extraction');
-          console.error('Extracted order data:', JSON.stringify(orderData, null, 2));
-          
-          // Add AI response asking for clarification (don't overwrite user message)
-          const clarificationMessage = 'I couldn\'t find those items in our menu. Could you please tell me the exact name of what you\'d like to order?';
-          const clarificationWithIntent = {
-            role: 'assistant',
-            content: clarificationMessage,
-            intent: 'order_extraction_failed'
-          };
-          conversationHistory.push(clarificationWithIntent);
-          
-          if (conv) {
-            await saveMessageToDB(conv.id, 'assistant', clarificationMessage);
-          }
-          
-          // Update conversation data in DB
-          await saveConversationToDB(callSid, {
-            conversation_data: { messages: conversationHistory }
-          });
-          
-          sayNatural(twiml, clarificationMessage);
-          twiml.gather({
-            input: 'speech',
-            action: '/api/voice/handle-speech',
-            method: 'POST',
-            speechTimeout: 'auto'
-          });
-          res.type('text/xml');
-          return res.send(twiml.toString());
-        }
-
-        // Generate unique order ID
-        const orderId = `ORD-${Date.now()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
-
-        // Create order
-        console.log('💾 Creating order in database...', {
-          order_id: orderId,
-          items: orderItems.length,
-          total: totalAmount
+      // Re-validate all items using stored menu IDs (final check)
+      const validationResults = [];
+      for (const item of cartItems) {
+        const validation = await validateMenuItemById(item.menu_item_id);
+        validationResults.push({
+          item: item,
+          validation: validation
         });
-        
-        const { data: order, error: orderError } = await supabase
-          .from('orders')
-          .insert({
-            order_id: orderId,
-            customer_name: orderData.customer_name || 'Guest',
-            customer_phone: req.body.From || null,
-            items: orderItems,
-            total_amount: totalAmount.toFixed(2),
-            status: 'pending'
-          })
-          .select()
-          .single();
-
-        if (orderError || !order) {
-          console.error('❌ Order creation error:', orderError);
-          console.error('Order data attempted:', {
-            order_id: orderId,
-            items: orderItems,
-            total: totalAmount
-          });
-          sayNatural(twiml, 'I apologize, but there was an error processing your order. Please try again or call back.');
-        } else {
-          console.log('✅ Order created successfully:', order.order_id);
-          // Create order items
-          const orderItemsData = orderItems.map(oi => ({
-            order_id: order.id,
-            menu_item_id: oi.menu_item_id,
-            quantity: oi.quantity,
-            price: oi.price,
-            special_instructions: oi.special_instructions
-          }));
-
-          const { error: itemsError } = await supabase
-            .from('order_items')
-            .insert(orderItemsData);
-
-          if (itemsError) {
-            console.error('❌ Order items creation error:', itemsError);
-          } else {
-            console.log('✅ Order items created successfully');
-          }
-
-          // Read order ID character by character for better voice clarity
-          const orderIdSpoken = order.order_id.split('').join(' ');
-          const confirmationMessage = `Great! Your order has been confirmed. Your order ID is ${orderIdSpoken}. The total amount is ${totalAmount.toFixed(2)} dollars. Thank you for your order!`;
-          
-          // Create confirmation message with intent and order info
-          const confirmationMessageWithIntent = {
-            role: 'assistant',
-            content: confirmationMessage,
-            intent: 'order_placed',
-            order_id: order.order_id,
-            order_created: true,
-            total_amount: totalAmount.toFixed(2)
-          };
-          
-          // Add confirmation message to conversation history
-          conversationHistory.push(confirmationMessageWithIntent);
-          
-          // Use natural voice for confirmation
-          sayNatural(twiml, confirmationMessage);
-          
-          // Update conversation with order info
-          await saveConversationToDB(callSid, {
-            order_id: order.order_id,
-            order_placed: true,
-            customer_name: orderData.customer_name || null
-          });
-          
-          // Save order confirmation message
-          if (conv) {
-            await saveMessageToDB(conv.id, 'assistant', confirmationMessage);
-          }
-          
-          // Update conversation data with final confirmation
-          await saveConversationToDB(callSid, {
-            conversation_data: { messages: conversationHistory }
-          });
-          
-          conversations.delete(callSid);
-        }
-      } else {
-        console.error('❌ Order extraction failed - no items found');
-        const errorMessage = 'I couldn\'t extract your order details. Could you please tell me what you would like to order?';
-        conversationHistory.push({ role: 'assistant', content: errorMessage });
+      }
+      const invalidItems = validationResults.filter(r => !r.validation.valid);
+      
+      if (invalidItems.length > 0) {
+        console.error('❌ Some items are no longer available:', invalidItems);
+        const unavailableNames = invalidItems.map(r => r.item.menu_name).join(', ');
+        const errorMessage = `I'm sorry, but ${unavailableNames} ${invalidItems.length === 1 ? 'is' : 'are'} no longer available. Would you like to order something else?`;
+        conversationHistory.push({ role: 'assistant', content: errorMessage, intent: 'items_unavailable' });
         
         if (conv) {
           await saveMessageToDB(conv.id, 'assistant', errorMessage);
@@ -404,6 +414,114 @@ router.post('/handle-speech', async (req, res) => {
         });
         res.type('text/xml');
         return res.send(twiml.toString());
+      }
+      
+      // All items valid - create order
+      const validItems = validationResults.filter(r => r.validation.valid);
+      let totalAmount = 0;
+      const orderItems = [];
+      
+      for (const result of validItems) {
+        const item = result.item;
+        const itemTotal = parseFloat(item.price) * item.quantity;
+        totalAmount += itemTotal;
+        
+        orderItems.push({
+          menu_item_id: item.menu_item_id,
+          quantity: item.quantity,
+          price: item.price,
+          special_instructions: null
+        });
+      }
+      
+      // Generate unique order ID
+      const orderId = `ORD-${Date.now()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
+      
+      console.log('💾 Creating order in database...', {
+        order_id: orderId,
+        items: orderItems.length,
+        total: totalAmount,
+        cart_items: cartItems
+      });
+      
+      const { data: order, error: orderError } = await supabase
+        .from('orders')
+        .insert({
+          order_id: orderId,
+          customer_name: 'Guest',
+          customer_phone: req.body.From || null,
+          items: orderItems,
+          total_amount: totalAmount.toFixed(2),
+          status: 'pending'
+        })
+        .select()
+        .single();
+      
+      if (orderError || !order) {
+        console.error('❌ Order creation error:', orderError);
+        sayNatural(twiml, 'I apologize, but there was an error processing your order. Please try again or call back.');
+      } else {
+        console.log('✅ Order created successfully:', order.order_id);
+        
+        // Create order items
+        const orderItemsData = orderItems.map(oi => ({
+          order_id: order.id,
+          menu_item_id: oi.menu_item_id,
+          quantity: oi.quantity,
+          price: oi.price,
+          special_instructions: oi.special_instructions
+        }));
+        
+        const { error: itemsError } = await supabase
+          .from('order_items')
+          .insert(orderItemsData);
+        
+        if (itemsError) {
+          console.error('❌ Order items creation error:', itemsError);
+        } else {
+          console.log('✅ Order items created successfully');
+        }
+        
+        // Read order ID character by character for better voice clarity
+        const orderIdSpoken = order.order_id.split('').join(' ');
+        const confirmationMessage = `Great! Your order has been confirmed. Your order ID is ${orderIdSpoken}. The total amount is ${totalAmount.toFixed(2)} dollars. Thank you for your order!`;
+        
+        // Create confirmation message with intent and order info
+        const confirmationMessageWithIntent = {
+          role: 'assistant',
+          content: confirmationMessage,
+          intent: 'order_placed',
+          order_id: order.order_id,
+          order_created: true,
+          total_amount: totalAmount.toFixed(2)
+        };
+        
+        // Add confirmation message to conversation history
+        conversationHistory.push(confirmationMessageWithIntent);
+        
+        // Use natural voice for confirmation
+        sayNatural(twiml, confirmationMessage);
+        
+        // Update conversation with order info
+        await saveConversationToDB(callSid, {
+          order_id: order.order_id,
+          order_placed: true,
+          customer_name: null
+        });
+        
+        // Save order confirmation message
+        if (conv) {
+          await saveMessageToDB(conv.id, 'assistant', confirmationMessage);
+        }
+        
+        // Update conversation data with final confirmation
+        await saveConversationToDB(callSid, {
+          conversation_data: { messages: conversationHistory }
+        });
+        
+        // Clear cart and conversation
+        clearCart(callSid);
+        conversations.delete(callSid);
       }
     } else {
       // Continue normal conversation (NOT an order confirmation)
