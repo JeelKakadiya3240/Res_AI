@@ -94,16 +94,15 @@ async function saveMessageToDB(conversationId, role, content) {
 function formatNaturalSpeech(text) {
   // Add natural pauses after punctuation for more human-like rhythm
   let formatted = text
-    .replace(/\.\.\./g, '<break time="500ms"/>') // Longer pause for ellipsis
-    .replace(/\. /g, '. <break time="400ms"/>') // Longer pause after sentences
-    .replace(/\? /g, '? <break time="500ms"/>') // Longer pause after questions
-    .replace(/! /g, '! <break time="400ms"/>') // Pause after exclamations
-    .replace(/, /g, ', <break time="300ms"/>') // Pause after commas
-    .replace(/\. /g, '. <break time="400ms"/>'); // Ensure sentence pauses
+    .replace(/\.\.\./g, '<break time="400ms"/>') // Natural pause for ellipsis
+    .replace(/\. /g, '. <break time="300ms"/>') // Natural pause after sentences
+    .replace(/\? /g, '? <break time="350ms"/>') // Pause after questions
+    .replace(/! /g, '! <break time="300ms"/>') // Pause after exclamations
+    .replace(/, /g, ', <break time="200ms"/>'); // Brief pause after commas
   
-  // Wrap in SSML with prosody for natural speech (rate and pitch adjustments)
+  // Wrap in SSML with prosody for natural speech (warmer, mature tone)
   return `<speak>
-    <prosody rate="medium" pitch="medium">
+    <prosody rate="medium" pitch="low" volume="medium">
       ${formatted}
     </prosody>
   </speak>`;
@@ -111,9 +110,10 @@ function formatNaturalSpeech(text) {
 
 // Helper function to say text with human-like voice
 function sayNatural(twiml, text, options = {}) {
-  // Use Amazon Polly neural voice - sounds very natural and human-like
-  // Options: polly.Joanna (female), polly.Matthew (male), polly.Amy, polly.Brian
-  const voice = options.voice || 'polly.Joanna';
+  // Use Amazon Polly neural voice - mature, warm female voice
+  // Options: polly.Ruth (mature female), polly.Joanna (younger female), polly.Amy (British)
+  // If polly.Ruth is not available, fallback to polly.Joanna with lower pitch
+  const voice = options.voice || 'polly.Ruth'; // Mature, warm female voice
   const language = options.language || 'en-US';
   
   // Use SSML for more natural speech with pauses and prosody
@@ -302,7 +302,10 @@ router.post('/handle-speech', async (req, res) => {
         });
       } else {
         // Low confidence - show menu or ask
-        const topItems = lookupResult.candidates.slice(0, 3).map(c => c.menu_name).join(', ');
+        const topItems = lookupResult.candidates && lookupResult.candidates.length > 0
+          ? lookupResult.candidates.slice(0, 3).map(c => c.menu_name).join(', ')
+          : 'some items from our menu';
+        
         const response = `I couldn't find "${itemText}" on our menu. Did you mean ${topItems}? Or would you like to hear our menu?`;
         conversationHistory.push({ role: 'assistant', content: response, intent: 'item_not_found' });
         

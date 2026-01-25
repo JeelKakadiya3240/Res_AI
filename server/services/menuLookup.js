@@ -21,7 +21,12 @@ const MENU_SYNONYMS = {
   'milkshake': ['milkshake', 'milkshakes', 'shake', 'shakes', 'milk shake'],
   'apple pie': ['apple pie', 'apple pies', 'pie', 'apple pye'],
   'chocolate cake': ['chocolate cake', 'choclate cake', 'chocolate', 'choc cake'],
-  'ice cream': ['ice cream', 'icecream', 'ice creams', 'gelato', 'frozen dessert']
+  'ice cream': ['ice cream', 'icecream', 'ice creams', 'gelato', 'frozen dessert'],
+  // BEVERAGES - Add common typos and variations
+  'lemonade': ['lemonade', 'lemon ade', 'lemmon', 'lemmonade', 'laminate', 'lemon aid', 'lemonaide', 'lemonade drink', 'lemon drink', 'lemon ad', 'lemmon ade'],
+  'cola': ['cola', 'coke', 'coca cola', 'pepsi', 'soda', 'soft drink', 'pop'],
+  'iced tea': ['iced tea', 'ice tea', 'ice d tea', 'iced t', 'tea', 'sweet tea', 'icedtea'],
+  'coffee': ['coffee', 'coffe', 'cofee', 'cafe', 'espresso', 'latte', 'cappuccino']
 };
 
 // Confidence thresholds
@@ -105,14 +110,15 @@ async function lookupMenuItem(rawText, quantity = 1) {
   // Log the lookup attempt
   console.log(`🔍 Menu lookup: raw="${rawText}" → normalized="${normalized}"`);
 
-  // Configure Fuse.js for fuzzy matching
+  // Configure Fuse.js for fuzzy matching - more lenient for typos
   const fuse = new Fuse(menuItems, {
     keys: ['name'],
-    threshold: 0.4, // Lower threshold = more strict (0.0 = exact match, 1.0 = match anything)
+    threshold: 0.5, // Increased from 0.4 - more lenient (allows more typos like "lemmon")
     includeScore: true,
     minMatchCharLength: 2,
     ignoreLocation: true,
-    findAllMatches: false
+    findAllMatches: false,
+    shouldSort: true
   });
 
   // Search with normalized text
@@ -127,8 +133,47 @@ async function lookupMenuItem(rawText, quantity = 1) {
     synonymResults.push(...synonymSearch);
   }
 
-  // Combine and deduplicate results
-  const allResults = [...results, ...synonymResults];
+  // Also try direct word matching for common typos
+  // Handle cases like "lemmon" -> "lemonade", "laminate" -> "lemonade"
+  const directMatches = [];
+  for (const menuItem of menuItems) {
+    const menuNameLower = menuItem.name.toLowerCase();
+    const normalizedLower = normalized.toLowerCase();
+    
+    // Check if key words match (e.g., "lemmon" contains "lemon")
+    const menuWords = menuNameLower.split(/\s+/);
+    const inputWords = normalizedLower.split(/\s+/);
+    
+    for (const inputWord of inputWords) {
+      // Skip very short words
+      if (inputWord.length < 3) continue;
+      
+      for (const menuWord of menuWords) {
+        // Check if words are similar (handles typos)
+        // e.g., "lemmon" matches "lemon" in "lemonade"
+        if (menuWord.includes(inputWord) || inputWord.includes(menuWord)) {
+          if (menuWord.length >= 3 && inputWord.length >= 3) {
+            // Calculate similarity score
+            const longer = Math.max(menuWord.length, inputWord.length);
+            const shorter = Math.min(menuWord.length, inputWord.length);
+            const similarity = shorter / longer;
+            
+            if (similarity >= 0.5) { // At least 50% similar
+              directMatches.push({
+                item: menuItem,
+                score: 1 - similarity, // Lower score = better match
+                confidence: similarity
+              });
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Combine all results
+  const allResults = [...results, ...synonymResults, ...directMatches];
   const uniqueResults = [];
   const seenIds = new Set();
   
