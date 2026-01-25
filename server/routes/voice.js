@@ -100,9 +100,9 @@ function formatNaturalSpeech(text) {
     .replace(/! /g, '! <break time="300ms"/>') // Pause after exclamations
     .replace(/, /g, ', <break time="200ms"/>'); // Brief pause after commas
   
-  // Wrap in SSML with prosody for natural speech (faster rate, warmer tone)
+  // Wrap in SSML with prosody for natural speech (medium rate, warmer tone)
   return `<speak>
-    <prosody rate="fast" pitch="low" volume="medium">
+    <prosody rate="medium" pitch="low" volume="medium">
       ${formatted}
     </prosody>
   </speak>`;
@@ -690,6 +690,9 @@ router.post('/handle-speech', async (req, res) => {
         });
       } else {
         // Fallback to normal AI response
+        // Say "Let me check" immediately to fill processing time
+        sayNatural(twiml, 'Let me check that for you.');
+        
         const aiResponse = await handleCustomerQuery(speechResult, conversationHistory);
         conversationHistory.push({ role: 'assistant', content: aiResponse, intent: userIntent });
         
@@ -714,6 +717,10 @@ router.post('/handle-speech', async (req, res) => {
       
     } else {
       // Continue normal conversation (handles menu_inquiry, item_inquiry, angry_complaint, etc.)
+      // Say "Let me check" immediately to fill processing time
+      sayNatural(twiml, 'Let me check that for you.');
+      
+      // Process AI response (this takes time)
       const aiResponse = await handleCustomerQuery(speechResult, conversationHistory);
       
       // Create response object with intent
