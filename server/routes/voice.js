@@ -155,56 +155,22 @@ router.post('/handle-speech', async (req, res) => {
   }
 
   try {
-    // Check if user wants to place/confirm an order FIRST (before generating AI response)
-    const lowerResponse = speechResult.toLowerCase().trim();
+    // Detect user intent FIRST (before generating AI response)
+    console.log('🔍 Detecting user intent for:', speechResult);
+    const userIntent = await detectIntent(speechResult, conversationHistory);
+    console.log('🎯 Detected intent:', userIntent);
     
-    // Handle phrases like "No confirm" or "No, confirm" - these mean "No (nothing else), confirm (the order)"
-    const normalizedResponse = lowerResponse
-      .replace(/^no\s*,\s*confirm/i, 'confirm')  // "No, confirm" -> "confirm"
-      .replace(/^no\s+confirm/i, 'confirm')      // "No confirm" -> "confirm"
-      .replace(/^nothing\s+else\s*,\s*confirm/i, 'confirm')
-      .trim();
+    // Add user message with intent to history
+    const userMessageWithIntent = {
+      role: 'user',
+      content: speechResult,
+      intent: userIntent
+    };
+    conversationHistory[conversationHistory.length - 1] = userMessageWithIntent;
     
-    const confirmPhrases = [
-      'confirm order',
-      'place order',
-      'yes confirm',
-      'confirm it',
-      'that\'s all',
-      'that is all',
-      'nothing else',
-      'yes that\'s it',
-      'yes place order',
-      'go ahead and confirm',
-      'confirm my order',
-      'i want to confirm',
-      'i confirm'
-    ];
-    
-    // Check if AI just asked for confirmation in the last message
-    const lastAIMessage = conversationHistory
-      .filter(m => m.role === 'assistant')
-      .slice(-1)[0]?.content?.toLowerCase() || '';
-    
-    const aiAskedForConfirmation = lastAIMessage.includes('confirm') || 
-                                   lastAIMessage.includes('correct') ||
-                                   lastAIMessage.includes('place the order');
-    
-    // Check if user response is a simple confirmation
-    const isSimpleYes = ['yes', 'yeah', 'yep', 'correct', 'right', 'sure', 'okay', 'ok'].includes(normalizedResponse);
-    
-    // Check for confirmation phrases (use normalized response)
-    const hasConfirmPhrase = confirmPhrases.some(phrase => normalizedResponse.includes(phrase));
-    
-    // Check if response contains "confirm" and "order"
-    const hasConfirmAndOrder = normalizedResponse.includes('confirm') && normalizedResponse.includes('order');
-    
-    const wantsToConfirm = hasConfirmPhrase ||
-      hasConfirmAndOrder ||
-      (isSimpleYes && aiAskedForConfirmation);
-    
-    if (wantsToConfirm) {
-      console.log('🔔 Order confirmation detected:', speechResult);
+    // If intent is to confirm/place order, process order creation
+    if (userIntent === 'confirm_order') {
+      console.log('🔔 Order confirmation intent detected - processing order creation');
       console.log('📝 Full conversation history:', JSON.stringify(conversationHistory, null, 2));
       
       // Extract order details from ENTIRE conversation
