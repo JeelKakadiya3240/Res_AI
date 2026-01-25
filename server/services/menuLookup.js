@@ -239,19 +239,48 @@ async function lookupMenuItem(rawText, quantity = 1) {
   // Convert Fuse.js scores to confidence (0-1 scale, higher is better)
   // Fuse.js score: 0 = perfect match, 1 = no match
   // Confidence: 1 = perfect match, 0 = no match
-  const candidates = uniqueResults.slice(0, 5).map(result => ({
-    menu_id: result.item.id,
-    menu_name: result.item.name,
-    price: result.item.price,
-    category: result.item.category,
-    score: result.score,
-    confidence: 1 - result.score, // Convert to confidence (higher is better)
-    raw_text: rawText,
-    normalized_text: normalized
-  }));
+  const inputWords = normalizedLower.split(/\s+/).filter(w => w.length > 2); // Filter out short words
+  
+  const candidates = uniqueResults.slice(0, 5).map(result => {
+    let confidence = 1 - result.score; // Base confidence from Fuse.js score
+    
+    // Boost confidence for items that contain all input words (prioritize longer, more specific matches)
+    // This fixes issues like "chocolate milkshake" matching "Cola" instead of "Chocolate Milkshake"
+    const menuNameLower = result.item.name.toLowerCase();
+    const matchingWords = inputWords.filter(word => menuNameLower.includes(word));
+    const wordMatchRatio = inputWords.length > 0 ? matchingWords.length / inputWords.length : 0;
+    
+    // If all words match, boost confidence significantly
+    if (wordMatchRatio === 1.0 && inputWords.length > 1) {
+      confidence = Math.min(0.95, confidence + 0.2); // Boost by 0.2, cap at 0.95
+    } else if (wordMatchRatio >= 0.8 && inputWords.length > 1) {
+      confidence = Math.min(0.9, confidence + 0.15); // Boost by 0.15 for mostly matching
+    } else if (wordMatchRatio >= 0.5 && inputWords.length > 1) {
+      confidence = Math.min(0.85, confidence + 0.1); // Small boost for partial matches
+    }
+    
+    // Also boost if the menu item name contains the full normalized input (exact phrase match)
+    if (menuNameLower.includes(normalizedLower) && normalizedLower.length > 5) {
+      confidence = Math.min(0.98, confidence + 0.25); // Strong boost for phrase match
+    }
+    
+    return {
+      menu_id: result.item.id,
+      menu_name: result.item.name,
+      price: result.item.price,
+      category: result.item.category,
+      score: result.score,
+      confidence: confidence, // Use boosted confidence
+      raw_text: rawText,
+      normalized_text: normalized
+    };
+  });
+  
+  // Re-sort by boosted confidence (higher is better)
+  candidates.sort((a, b) => b.confidence - a.confidence);
 
-  // Log candidates
-  console.log(`📋 Found ${candidates.length} candidates:`, 
+  // Log candidates with detailed info
+  console.log(`📋 Found ${candidates.length} candidates for "${rawText}" (normalized: "${normalized}"):`, 
     candidates.map(c => `${c.menu_name} (conf: ${c.confidence.toFixed(2)})`).join(', '));
 
   if (candidates.length === 0) {

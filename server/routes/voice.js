@@ -344,12 +344,18 @@ router.post('/handle-speech', async (req, res) => {
         qtyMatch[1].toLowerCase().includes('four') ? 4 : 
         qtyMatch[1].toLowerCase().includes('five') ? 5 : 1)) : 1;
       
-      // Remove quantity and correction phrases from text to get item name
+      // Remove quantity, correction phrases, and common ordering phrases from text to get item name
+      // This fixes issues like "Yes, can you order 2 chocolate milkshake" → should extract "chocolate milkshake"
       const itemText = speechResult
         .replace(/\b(no|not|wrong|that's not|that is not|i said|i meant|just)\s+/gi, '')
+        .replace(/\b(yes|yeah|yep|sure|okay|ok|please|can you|could you|will you|i want|i'd like|i would like|i need|i'll have|give me|get me|order|add|put)\s+/gi, '')
         .replace(/\b(one|1|two|2|three|3|four|4|five|5|\d+)\b/gi, '')
         .replace(/^[^a-z]*/i, '') // Remove leading non-alphabetic chars
+        .replace(/\s+/g, ' ') // Normalize multiple spaces
         .trim();
+      
+      // Log extracted item text for debugging
+      console.log(`🔍 [ORDER_ITEM] Original: "${speechResult}" → Extracted: "${itemText}" (quantity: ${quantity})`);
       
       // Lookup menu item with fuzzy matching
       const lookupResult = await lookupMenuItem(itemText, quantity);
