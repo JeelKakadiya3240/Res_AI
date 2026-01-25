@@ -100,9 +100,9 @@ function formatNaturalSpeech(text) {
     .replace(/! /g, '! <break time="300ms"/>') // Pause after exclamations
     .replace(/, /g, ', <break time="200ms"/>'); // Brief pause after commas
   
-  // Wrap in SSML with prosody for natural speech (warmer, mature tone)
+  // Wrap in SSML with prosody for natural speech (faster rate, warmer tone)
   return `<speak>
-    <prosody rate="medium" pitch="low" volume="medium">
+    <prosody rate="fast" pitch="low" volume="medium">
       ${formatted}
     </prosody>
   </speak>`;
