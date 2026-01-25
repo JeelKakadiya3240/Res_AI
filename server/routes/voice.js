@@ -207,8 +207,33 @@ router.post('/handle-speech', async (req, res) => {
       
       // Extract order details from ENTIRE conversation
       console.log('📦 Extracting order from conversation...');
+      console.log('📝 Conversation history for extraction:', JSON.stringify(
+        conversationHistory.map(m => ({ role: m.role, content: m.content })),
+        null, 2
+      ));
+      
       const orderData = await extractOrderFromConversation(conversationHistory);
       console.log('📦 Extracted order data:', JSON.stringify(orderData, null, 2));
+      
+      if (!orderData) {
+        console.error('❌ Order extraction returned null');
+        const errorMessage = 'I couldn\'t extract your order details. Could you please tell me what you would like to order?';
+        conversationHistory.push({ role: 'assistant', content: errorMessage, intent: 'order_extraction_failed' });
+        
+        if (conv) {
+          await saveMessageToDB(conv.id, 'assistant', errorMessage);
+        }
+        
+        sayNatural(twiml, errorMessage);
+        twiml.gather({
+          input: 'speech',
+          action: '/api/voice/handle-speech',
+          method: 'POST',
+          speechTimeout: 'auto'
+        });
+        res.type('text/xml');
+        return res.send(twiml.toString());
+      }
       
       if (orderData && orderData.items && orderData.items.length > 0) {
         // Calculate total amount and prepare order items

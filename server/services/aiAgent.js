@@ -151,7 +151,13 @@ async function extractOrderFromConversation(conversationHistory) {
     const menuItems = await getMenuContext();
     const formattedMenu = formatMenuForAI(menuItems);
 
-    const systemPrompt = `Extract order details from the ENTIRE conversation history. Look for ALL items mentioned throughout the conversation, not just the last message.
+    // Clean conversation history - only keep role and content for extraction
+    const cleanHistory = conversationHistory.map(msg => ({
+      role: msg.role,
+      content: msg.content
+    }));
+
+    const systemPrompt = `Extract order details from the ENTIRE conversation history. Look for ALL items mentioned throughout the conversation, including items confirmed by the assistant.
 
 Return a JSON object with this structure:
 {
@@ -166,38 +172,47 @@ Return a JSON object with this structure:
 }
 
 IMPORTANT RULES:
-1. Look through the ENTIRE conversation for items mentioned
-2. Match item names to the exact menu item names below
-3. Handle common typos:
+1. Look through the ENTIRE conversation for items mentioned by the USER or confirmed by the ASSISTANT
+2. If assistant says "Got it, one Vegetable Samosa" or "one Vegetable Samosa", extract that item
+3. Match item names to the exact menu item names below
+4. Handle common typos:
    - "simosa" or "samos" = "Vegetable Samosa"
    - "biriyani" = "Chicken Biryani"
    - "butter chicken" = "Butter Chicken"
-4. If customer said "vegetable samosa" or "samosa", use "Vegetable Samosa"
-5. If quantity is not mentioned, default to 1
-6. Use the EXACT menu item name from the list below
+5. If customer said "vegetable samosa" or "samosa", use "Vegetable Samosa"
+6. If quantity is not mentioned, default to 1
+7. Use the EXACT menu item name from the list below
+8. Look at assistant messages too - they often confirm items like "Got it, one Vegetable Samosa"
 
 Available menu items:
 ${JSON.stringify(formattedMenu.map(item => ({ name: item.name })), null, 2)}
 
-Example: If conversation mentions "I want vegetable samosa" earlier, extract it even if the last message is just "confirm order".
+Example conversations:
+- User: "I want vegetable samosa" → Extract: {"menu_item_name": "Vegetable Samosa", "quantity": 1}
+- Assistant: "Got it, one Vegetable Samosa" → Extract: {"menu_item_name": "Vegetable Samosa", "quantity": 1}
+- User: "I want 1 simosa" → Extract: {"menu_item_name": "Vegetable Samosa", "quantity": 1}
 
 Return ONLY valid JSON, no other text.`;
 
     const messages = [
       { role: 'system', content: systemPrompt },
-      ...conversationHistory,
-      { role: 'user', content: 'Extract the order details from our conversation.' }
+      ...cleanHistory,
+      { role: 'user', content: 'Extract the order details from our conversation. Return JSON with items array.' }
     ];
 
     const completion = await openai.chat.completions.create({
       model: 'gpt-4-turbo-preview',
       messages: messages,
-      temperature: 0.3,
+      temperature: 0.1, // Lower temperature for more consistent extraction
       max_tokens: 500,
       response_format: { type: 'json_object' }
     });
 
-    const orderData = JSON.parse(completion.choices[0].message.content);
+    const responseContent = completion.choices[0].message.content;
+    console.log('📦 Raw extraction response:', responseContent);
+    
+    const orderData = JSON.parse(responseContent);
+    console.log('📦 Parsed order data:', JSON.stringify(orderData, null, 2));
     
     // Map menu item names to IDs (with improved fuzzy matching)
     const itemsWithIds = [];
@@ -275,13 +290,76 @@ Return ONLY valid JSON, no other text.`;
       }
     }
 
+    // If no items found, try fallback: extract from assistant confirmation messages
+    if (itemsWithIds.length === 0) {
+      console.log('🔄 No items found in AI extraction, trying fallback extraction from assistant messages...');
+      
+      // Look for assistant messages that confirm items (e.g., "Got it, one Vegetable Samosa")
+      for (const msg of cleanHistory) {
+        if (msg.role === 'assistant' && msg.content) {
+          const content = msg.content.toLowerCase();
+          
+          // Pattern: "Got it, one [item]" or "one [item]"
+          const patterns = [
+            /got it,?\s*(?:one|1|two|2|three|3|four|4|five|5)\s+([^.!?]+)/i,
+            /(?:one|1|two|2|three|3|four|4|five|5)\s+([^.!?]+?)(?:\s|,|\.|$)/i
+          ];
+          
+          for (const pattern of patterns) {
+            const match = content.match(pattern);
+            if (match) {
+              const mentionedItem = match[1].trim();
+              console.log(`🔍 Found mentioned item in assistant message: "${mentionedItem}"`);
+              
+              // Try to match this to a menu item
+              for (const menuItem of menuItems) {
+                const menuNameLower = menuItem.name.toLowerCase();
+                const mentionedLower = mentionedItem.toLowerCase();
+                
+                // Check if menu item name contains the mentioned item or vice versa
+                if (menuNameLower.includes(mentionedLower) || mentionedLower.includes(menuNameLower)) {
+                  // Extract quantity if mentioned
+                  const qtyMatch = content.match(/(?:one|1|two|2|three|3|four|4|five|5)/i);
+                  let quantity = 1;
+                  if (qtyMatch) {
+                    const qtyText = qtyMatch[0].toLowerCase();
+                    if (qtyText.includes('two') || qtyText === '2') quantity = 2;
+                    else if (qtyText.includes('three') || qtyText === '3') quantity = 3;
+                    else if (qtyText.includes('four') || qtyText === '4') quantity = 4;
+                    else if (qtyText.includes('five') || qtyText === '5') quantity = 5;
+                  }
+                  
+                  itemsWithIds.push({
+                    menu_item_id: menuItem.id,
+                    quantity: quantity
+                  });
+                  console.log(`✅ Fallback matched "${mentionedItem}" to "${menuItem.name}" (qty: ${quantity})`);
+                  break; // Found a match, move to next message
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (itemsWithIds.length === 0) {
+      console.error('❌ No items extracted after all attempts');
+      return {
+        items: [],
+        customer_name: orderData?.customer_name || null,
+        customer_phone: orderData?.customer_phone || null
+      };
+    }
+
     return {
       items: itemsWithIds,
-      customer_name: orderData.customer_name || null,
-      customer_phone: orderData.customer_phone || null
+      customer_name: orderData?.customer_name || null,
+      customer_phone: orderData?.customer_phone || null
     };
   } catch (error) {
     console.error('Order Extraction Error:', error);
+    console.error('Error stack:', error.stack);
     return null;
   }
 }
