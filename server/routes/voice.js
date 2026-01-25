@@ -75,6 +75,37 @@ async function saveMessageToDB(conversationId, role, content) {
   }
 }
 
+// Helper function to format text for natural human-like speech with SSML
+function formatNaturalSpeech(text) {
+  // Add natural pauses after punctuation for more human-like rhythm
+  let formatted = text
+    .replace(/\. /g, '. <break time="300ms"/>')
+    .replace(/\? /g, '? <break time="400ms"/>')
+    .replace(/! /g, '! <break time="300ms"/>')
+    .replace(/, /g, ', <break time="200ms"/>');
+  
+  // Wrap in SSML with prosody for natural speech (rate and pitch adjustments)
+  return `<speak>
+    <prosody rate="medium" pitch="medium">
+      ${formatted}
+    </prosody>
+  </speak>`;
+}
+
+// Helper function to say text with human-like voice
+function sayNatural(twiml, text, options = {}) {
+  // Use Amazon Polly neural voice - sounds very natural and human-like
+  // Options: polly.Joanna (female), polly.Matthew (male), polly.Amy, polly.Brian
+  const voice = options.voice || 'polly.Joanna';
+  const language = options.language || 'en-US';
+  
+  // Use SSML for more natural speech with pauses and prosody
+  twiml.say({
+    voice: voice,
+    language: language
+  }, formatNaturalSpeech(text));
+}
+
 // Handle incoming call
 router.post('/incoming-call', async (req, res) => {
   if (!twilio) {
@@ -98,7 +129,8 @@ router.post('/incoming-call', async (req, res) => {
   
   const twiml = new twilio.twiml.VoiceResponse();
   
-  twiml.say('Welcome to our restaurant AI assistant. How can I help you today?');
+  // Use natural human-like voice
+  sayNatural(twiml, 'Welcome to our restaurant. How can I help you today?');
   twiml.gather({
     input: 'speech',
     action: '/api/voice/handle-speech',
@@ -122,7 +154,7 @@ router.post('/handle-speech', async (req, res) => {
   const callSid = req.body.CallSid;
 
   if (!speechResult) {
-    twiml.say('I didn\'t catch that. Could you please repeat?');
+    sayNatural(twiml, 'I didn\'t catch that. Could you please repeat?');
     twiml.redirect('/api/voice/incoming-call');
     res.type('text/xml');
     return res.send(twiml.toString());
@@ -227,7 +259,7 @@ router.post('/handle-speech', async (req, res) => {
             conversation_data: { messages: conversationHistory }
           });
           
-          twiml.say(clarificationMessage);
+          sayNatural(twiml, clarificationMessage);
           twiml.gather({
             input: 'speech',
             action: '/api/voice/handle-speech',
@@ -268,7 +300,7 @@ router.post('/handle-speech', async (req, res) => {
             items: orderItems,
             total: totalAmount
           });
-          twiml.say('I apologize, but there was an error processing your order. Please try again or call back.');
+          sayNatural(twiml, 'I apologize, but there was an error processing your order. Please try again or call back.');
         } else {
           console.log('✅ Order created successfully:', order.order_id);
           // Create order items
@@ -307,7 +339,8 @@ router.post('/handle-speech', async (req, res) => {
           // Add confirmation message to conversation history
           conversationHistory.push(confirmationMessageWithIntent);
           
-          twiml.say(confirmationMessage);
+          // Use natural voice for confirmation
+          sayNatural(twiml, confirmationMessage);
           
           // Update conversation with order info
           await saveConversationToDB(callSid, {
@@ -337,7 +370,7 @@ router.post('/handle-speech', async (req, res) => {
           await saveMessageToDB(conv.id, 'assistant', errorMessage);
         }
         
-        twiml.say(errorMessage);
+        sayNatural(twiml, errorMessage);
         twiml.gather({
           input: 'speech',
           action: '/api/voice/handle-speech',
@@ -371,8 +404,8 @@ router.post('/handle-speech', async (req, res) => {
         conversation_data: { messages: conversationHistory }
       });
       
-      // Continue conversation
-      twiml.say(aiResponse);
+      // Continue conversation with natural voice
+      sayNatural(twiml, aiResponse);
       twiml.gather({
         input: 'speech',
         action: '/api/voice/handle-speech',
@@ -382,7 +415,7 @@ router.post('/handle-speech', async (req, res) => {
     }
   } catch (error) {
     console.error('Voice handler error:', error);
-    twiml.say('I apologize, but I encountered an error. Please try again.');
+    sayNatural(twiml, 'I apologize, but I encountered an error. Please try again.');
     twiml.gather({
       input: 'speech',
       action: '/api/voice/handle-speech',
