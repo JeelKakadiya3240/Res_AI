@@ -162,7 +162,7 @@ function formatNaturalSpeech(text) {
   // Or percentage: 20-200% (100% = normal speed)
   // Note: SSML prosody only works with Amazon Polly voices, not built-in Twilio voices
   return `<speak>
-    <prosody rate="35%">
+    <prosody rate="25%">
       ${formatted}
     </prosody>
   </speak>`;
