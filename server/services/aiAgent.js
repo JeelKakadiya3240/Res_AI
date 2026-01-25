@@ -35,21 +35,28 @@ function formatMenuForAI(menuItems) {
 // Detect user intent from query
 async function detectIntent(query, conversationHistory = []) {
   try {
-    const intentPrompt = `Analyze the user's message and determine their intent. Return ONLY a JSON object with this structure:
+    const intentPrompt = `Analyze the user's message and determine their intent. Consider the conversation context.
+
+Return ONLY a JSON object with this structure:
 {
   "intent": "menu_inquiry" | "item_inquiry" | "order_item" | "confirm_order" | "general_question" | "order_status",
   "confidence": 0.0-1.0
 }
 
 Intent meanings:
-- "menu_inquiry": User wants to know what's on the menu
+- "menu_inquiry": User wants to know what's on the menu (e.g., "what's on the menu", "show me menu")
 - "item_inquiry": User wants details about a specific item (ingredients, spice level, price)
-- "order_item": User wants to add an item to their order
-- "confirm_order": User wants to confirm/place their order (says "yes", "confirm", "place order", etc.)
-- "order_status": User wants to know their order ID or order status
+- "order_item": User wants to add an item to their order (e.g., "I want vegetable samosa", "order butter chicken")
+- "confirm_order": User wants to confirm/place their order. Look for: "yes", "correct", "confirm", "place order", "that's all", "nothing else" - especially if AI just asked for confirmation
+- "order_status": User wants to know their order ID or order status (e.g., "what's my order ID")
 - "general_question": General questions about the restaurant
 
+IMPORTANT: If the AI just asked "correct?" or "confirm?" and user says "yes", "correct", "right", etc., the intent is "confirm_order".
+
 User message: "${query}"
+
+Recent conversation context:
+${conversationHistory.slice(-3).map(m => `${m.role}: ${m.content}`).join('\n')}
 
 Return ONLY valid JSON, no other text.`;
 
