@@ -97,13 +97,18 @@ async function extractOrderFromConversation(conversationHistory) {
 {
   "items": [
     {
-      "menu_item_name": "exact name from menu",
+      "menu_item_name": "exact name from menu (match to available items below)",
       "quantity": number
     }
   ],
   "customer_name": "name if mentioned",
   "customer_phone": "phone if mentioned"
 }
+
+IMPORTANT: Match item names to the exact menu item names below. Handle common typos:
+- "simosa" or "samos" = "Vegetable Samosa"
+- "biriyani" = "Chicken Biryani"
+- Use the EXACT menu item name from the list below.
 
 Available menu items:
 ${JSON.stringify(formattedMenu.map(item => ({ name: item.name })), null, 2)}
@@ -126,7 +131,7 @@ Return ONLY valid JSON, no other text.`;
 
     const orderData = JSON.parse(completion.choices[0].message.content);
     
-    // Map menu item names to IDs (with fuzzy matching)
+    // Map menu item names to IDs (with improved fuzzy matching)
     const itemsWithIds = [];
     for (const item of orderData.items || []) {
       const itemNameLower = item.menu_item_name.toLowerCase().trim();
@@ -144,13 +149,49 @@ Return ONLY valid JSON, no other text.`;
         );
       }
       
-      // Try matching without common words
+      // Try matching key words (handles typos like "simosa" -> "samosa")
       if (!menuItem) {
-        const itemWords = itemNameLower.split(/\s+/);
+        const itemWords = itemNameLower.split(/\s+/).filter(w => w.length > 2);
         menuItem = menuItems.find(m => {
           const menuWords = m.name.toLowerCase().split(/\s+/);
-          return itemWords.some(w => menuWords.includes(w)) && 
-                 menuWords.some(w => itemWords.includes(w));
+          // Check if key words match (handles typos)
+          return itemWords.some(itemWord => {
+            return menuWords.some(menuWord => {
+              // Exact word match
+              if (menuWord === itemWord) return true;
+              // Similar word match (handles common typos)
+              if (menuWord.includes(itemWord) || itemWord.includes(menuWord)) return true;
+              // Handle common typos
+              const typoMap = {
+                'simosa': 'samosa',
+                'samos': 'samosa',
+                'samosa': 'samosa',
+                'biryani': 'biryani',
+                'biriyani': 'biryani',
+                'butter': 'butter',
+                'chicken': 'chicken',
+                'paneer': 'paneer',
+                'tikka': 'tikka'
+              };
+              const normalizedItem = typoMap[itemWord] || itemWord;
+              const normalizedMenu = typoMap[menuWord] || menuWord;
+              return normalizedItem === normalizedMenu || 
+                     normalizedMenu.includes(normalizedItem) ||
+                     normalizedItem.includes(normalizedMenu);
+            });
+          });
+        });
+      }
+      
+      // Try matching by removing common words and checking remaining words
+      if (!menuItem) {
+        const commonWords = ['vegetable', 'chicken', 'one', 'two', 'three', '1', '2', '3'];
+        const itemWords = itemNameLower.split(/\s+/).filter(w => !commonWords.includes(w) && w.length > 2);
+        menuItem = menuItems.find(m => {
+          const menuWords = m.name.toLowerCase().split(/\s+/).filter(w => !commonWords.includes(w));
+          return itemWords.length > 0 && itemWords.some(iw => 
+            menuWords.some(mw => mw.includes(iw) || iw.includes(mw))
+          );
         });
       }
       
@@ -162,6 +203,7 @@ Return ONLY valid JSON, no other text.`;
         console.log(`✅ Matched "${item.menu_item_name}" to "${menuItem.name}"`);
       } else {
         console.warn(`⚠️ Could not match menu item: "${item.menu_item_name}"`);
+        console.warn(`Available items: ${menuItems.map(m => m.name).join(', ')}`);
       }
     }
 

@@ -246,7 +246,18 @@ router.post('/handle-speech', async (req, res) => {
         }
 
         if (orderItems.length === 0) {
-          twiml.say('I couldn\'t find the items you mentioned. Could you please try again?');
+          console.error('❌ No valid items found after extraction');
+          console.error('Extracted order data:', JSON.stringify(orderData, null, 2));
+          
+          // Update AI response to ask for clarification instead of generic error
+          const clarificationMessage = 'I couldn\'t find those items in our menu. Could you please tell me the exact name of what you\'d like to order?';
+          conversationHistory[conversationHistory.length - 1].content = clarificationMessage;
+          
+          if (conv) {
+            await saveMessageToDB(conv.id, 'assistant', clarificationMessage);
+          }
+          
+          twiml.say(clarificationMessage);
           twiml.gather({
             input: 'speech',
             action: '/api/voice/handle-speech',
