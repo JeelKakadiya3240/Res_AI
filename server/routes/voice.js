@@ -111,8 +111,11 @@ function formatNaturalSpeech(text) {
 // Helper function to say text with human-like voice
 function sayNatural(twiml, text, options = {}) {
   // Use Amazon Polly neural voice - mature, warm female voice
-  // Options: polly.Ruth (mature female), polly.Joanna (younger female), polly.Amy (British)
-  // If polly.Ruth is not available, fallback to polly.Joanna with lower pitch
+  // Options: 
+  // - polly.Ruth (mature female, warm tone) - preferred
+  // - polly.Joanna (younger female, natural) - fallback
+  // - polly.Amy (British, mature) - alternative
+  // Note: If polly.Ruth is not available in your region, it will fallback automatically
   const voice = options.voice || 'polly.Ruth'; // Mature, warm female voice
   const language = options.language || 'en-US';
   
