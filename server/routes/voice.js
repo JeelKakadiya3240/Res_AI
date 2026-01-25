@@ -634,8 +634,77 @@ router.post('/handle-speech', async (req, res) => {
         clearCart(callSid);
         conversations.delete(callSid);
       }
+    } else if (userIntent === 'category_inquiry') {
+      // Handle category-specific inquiries
+      const { getMenuItemsByCategory, formatMenuByCategoryForAI } = require('../services/menuCategories');
+      
+      // Extract category from user query
+      const categoryMatch = speechResult.match(/(?:what|show|tell|have).*(?:in|for|under).*(beverages?|drinks?|soft drinks?|lunch|dinner|appetizers?|desserts?|main course|bread|sides?|burgers?|pizza)/i);
+      
+      if (categoryMatch) {
+        const categoryName = categoryMatch[1];
+        // Map common terms to actual category names
+        const categoryMap = {
+          'beverages': 'Beverage',
+          'drinks': 'Beverage',
+          'soft drinks': 'Beverage',
+          'lunch': 'Main Course',
+          'dinner': 'Main Course',
+          'appetizers': 'Appetizer',
+          'desserts': 'Dessert',
+          'main course': 'Main Course',
+          'bread': 'Bread',
+          'sides': 'Appetizer',
+          'burgers': 'Main Course',
+          'pizza': 'Main Course'
+        };
+        
+        const actualCategory = categoryMap[categoryName.toLowerCase()] || categoryName;
+        const categoryItems = await getMenuItemsByCategory(actualCategory);
+        const itemsText = formatMenuByCategoryForAI(categoryItems);
+        
+        const response = `In ${actualCategory}, we have... ${itemsText}. Would you like to order any of these?`;
+        conversationHistory.push({ role: 'assistant', content: response, intent: 'category_inquiry' });
+        
+        if (conv) {
+          await saveMessageToDB(conv.id, 'assistant', response);
+        }
+        
+        sayNatural(twiml, response);
+        twiml.gather({
+          input: 'speech',
+          action: '/api/voice/handle-speech',
+          method: 'POST',
+          speechTimeout: 'auto',
+          bargeIn: true,
+          bargeInOnSpeech: true
+        });
+      } else {
+        // Fallback to normal AI response
+        const aiResponse = await handleCustomerQuery(speechResult, conversationHistory);
+        conversationHistory.push({ role: 'assistant', content: aiResponse, intent: userIntent });
+        
+        if (conv) {
+          await saveMessageToDB(conv.id, 'assistant', aiResponse);
+        }
+        
+        sayNatural(twiml, aiResponse);
+        twiml.gather({
+          input: 'speech',
+          action: '/api/voice/handle-speech',
+          method: 'POST',
+          speechTimeout: 'auto',
+          bargeIn: true,
+          bargeInOnSpeech: true
+        });
+      }
+      
+      await saveConversationToDB(callSid, {
+        conversation_data: { messages: conversationHistory }
+      });
+      
     } else {
-      // Continue normal conversation (NOT an order confirmation)
+      // Continue normal conversation (handles menu_inquiry, item_inquiry, angry_complaint, etc.)
       const aiResponse = await handleCustomerQuery(speechResult, conversationHistory);
       
       // Create response object with intent
@@ -664,7 +733,9 @@ router.post('/handle-speech', async (req, res) => {
         input: 'speech',
         action: '/api/voice/handle-speech',
         method: 'POST',
-        speechTimeout: 'auto'
+        speechTimeout: 'auto',
+        bargeIn: true,
+        bargeInOnSpeech: true
       });
     }
   } catch (error) {
