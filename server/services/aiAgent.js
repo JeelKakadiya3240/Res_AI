@@ -304,28 +304,57 @@ Return ONLY valid JSON, no other text.`;
     if (itemsWithIds.length === 0) {
       console.log('🔄 No items found in AI extraction, trying fallback extraction from assistant messages...');
       
-      // Look for assistant messages that confirm items or summarize orders
-      for (const msg of cleanHistory) {
+      // Prioritize the most recent assistant message (likely the summary)
+      const assistantMessages = cleanHistory.filter(msg => msg.role === 'assistant').reverse();
+      
+      // Look for assistant messages that confirm items or summarize orders (most recent first)
+      for (const msg of assistantMessages) {
         if (msg.role === 'assistant' && msg.content) {
           const content = msg.content;
           const contentLower = content.toLowerCase();
           
           // Pattern 1: "So your order is: [items]. Is that correct?"
-          const summaryPattern = /so your order is:?\s*(.+?)(?:\.|,|\?|is that correct)/i;
-          const summaryMatch = content.match(summaryPattern);
+          // More flexible pattern to catch variations
+          const summaryPatterns = [
+            /so your order is:?\s*(.+?)(?:\.|,|\?|is that correct|correct\?)/i,
+            /your order is:?\s*(.+?)(?:\.|,|\?|is that correct|correct\?)/i,
+            /order is:?\s*(.+?)(?:\.|,|\?|is that correct|correct\?)/i
+          ];
           
-          if (summaryMatch) {
-            const orderSummary = summaryMatch[1].trim();
-            console.log(`🔍 Found order summary: "${orderSummary}"`);
+          let orderSummary = null;
+          for (const pattern of summaryPatterns) {
+            const match = content.match(pattern);
+            if (match) {
+              orderSummary = match[1].trim();
+              console.log(`🔍 Found order summary with pattern: "${orderSummary}"`);
+              break;
+            }
+          }
+          
+          if (orderSummary) {
+            // Clean up the summary - remove trailing punctuation
+            orderSummary = orderSummary.replace(/[\.\?\!]+$/, '').trim();
+            console.log(`🔍 Cleaned order summary: "${orderSummary}"`);
             
             // Parse items from summary (e.g., "one Vegetable Samosa, two Butter Chicken")
+            // Try multiple patterns to catch different formats
             const itemPatterns = [
-              /(?:one|1|two|2|three|3|four|4|five|5)\s+([^,\.!?]+)/gi,
-              /(\d+)\s+([^,\.!?]+)/gi
+              // Pattern: "one Vegetable Samosa" or "1 Vegetable Samosa"
+              /(?:one|1)\s+([^,\.!?]+?)(?:\s*[,\.]|\s*$|$)/gi,
+              /(?:two|2)\s+([^,\.!?]+?)(?:\s*[,\.]|\s*$|$)/gi,
+              /(?:three|3)\s+([^,\.!?]+?)(?:\s*[,\.]|\s*$|$)/gi,
+              /(?:four|4)\s+([^,\.!?]+?)(?:\s*[,\.]|\s*$|$)/gi,
+              /(?:five|5)\s+([^,\.!?]+?)(?:\s*[,\.]|\s*$|$)/gi,
+              // Pattern: numeric quantity "2 Vegetable Samosa"
+              /(\d+)\s+([^,\.!?]+?)(?:\s*[,\.]|\s*$|$)/gi
             ];
+            
+            const foundItems = [];
             
             for (const pattern of itemPatterns) {
               let match;
+              // Reset regex lastIndex
+              pattern.lastIndex = 0;
               while ((match = pattern.exec(orderSummary)) !== null) {
                 let quantity = 1;
                 let itemName = '';
@@ -336,32 +365,61 @@ Return ONLY valid JSON, no other text.`;
                   itemName = match[2].trim();
                 } else {
                   // Pattern with word: "one Vegetable Samosa"
-                  const qtyText = match[0].toLowerCase();
-                  if (qtyText.includes('two') || qtyText.includes('2')) quantity = 2;
-                  else if (qtyText.includes('three') || qtyText.includes('3')) quantity = 3;
-                  else if (qtyText.includes('four') || qtyText.includes('4')) quantity = 4;
-                  else if (qtyText.includes('five') || qtyText.includes('5')) quantity = 5;
+                  const fullMatch = match[0].toLowerCase();
+                  if (fullMatch.includes('two') || fullMatch.includes('2')) quantity = 2;
+                  else if (fullMatch.includes('three') || fullMatch.includes('3')) quantity = 3;
+                  else if (fullMatch.includes('four') || fullMatch.includes('4')) quantity = 4;
+                  else if (fullMatch.includes('five') || fullMatch.includes('5')) quantity = 5;
                   
                   itemName = match[1].trim();
                 }
                 
-                console.log(`🔍 Extracted from summary: "${itemName}" (qty: ${quantity})`);
+                // Clean item name
+                itemName = itemName.replace(/[\.\?\!]+$/, '').trim();
                 
-                // Try to match this to a menu item
-                for (const menuItem of menuItems) {
-                  const menuNameLower = menuItem.name.toLowerCase();
-                  const itemNameLower = itemName.toLowerCase();
-                  
-                  // Check if menu item name contains the mentioned item or vice versa
-                  if (menuNameLower.includes(itemNameLower) || itemNameLower.includes(menuNameLower)) {
+                if (itemName) {
+                  foundItems.push({ itemName, quantity });
+                  console.log(`🔍 Extracted from summary: "${itemName}" (qty: ${quantity})`);
+                }
+              }
+            }
+            
+            // Try to match extracted items to menu items
+            for (const { itemName, quantity } of foundItems) {
+              let matched = false;
+              
+              for (const menuItem of menuItems) {
+                const menuNameLower = menuItem.name.toLowerCase();
+                const itemNameLower = itemName.toLowerCase();
+                
+                // Check multiple matching strategies
+                const matches = 
+                  menuNameLower === itemNameLower || // Exact match
+                  menuNameLower.includes(itemNameLower) || // Menu contains item
+                  itemNameLower.includes(menuNameLower) || // Item contains menu
+                  // Word-by-word matching for "vegetable samosa" vs "Vegetable Samosa"
+                  itemNameLower.split(/\s+/).every(word => 
+                    word.length > 2 && menuNameLower.includes(word)
+                  );
+                
+                if (matches) {
+                  // Check if already added (avoid duplicates)
+                  const alreadyAdded = itemsWithIds.some(item => item.menu_item_id === menuItem.id);
+                  if (!alreadyAdded) {
                     itemsWithIds.push({
                       menu_item_id: menuItem.id,
                       quantity: quantity
                     });
                     console.log(`✅ Fallback matched "${itemName}" to "${menuItem.name}" (qty: ${quantity})`);
+                    matched = true;
                     break;
                   }
                 }
+              }
+              
+              if (!matched) {
+                console.warn(`⚠️ Could not match extracted item: "${itemName}"`);
+                console.warn(`Available menu items: ${menuItems.map(m => m.name).join(', ')}`);
               }
             }
           }
@@ -412,8 +470,56 @@ Return ONLY valid JSON, no other text.`;
       }
     }
 
+    // Last resort: Direct string matching from summary message
+    if (itemsWithIds.length === 0) {
+      console.log('🔄 Last resort: Trying direct string matching from summary...');
+      
+      // Find the most recent assistant message with "So your order is"
+      const summaryMessage = assistantMessages.find(msg => 
+        msg.content && msg.content.toLowerCase().includes('so your order is')
+      );
+      
+      if (summaryMessage) {
+        console.log(`🔍 Found summary message: "${summaryMessage.content}"`);
+        
+        // Direct matching: look for menu item names in the summary
+        for (const menuItem of menuItems) {
+          const menuNameLower = menuItem.name.toLowerCase();
+          const summaryLower = summaryMessage.content.toLowerCase();
+          
+          // Check if menu item name appears in summary
+          if (summaryLower.includes(menuNameLower)) {
+            // Try to extract quantity
+            let quantity = 1;
+            const qtyPattern = new RegExp(`(?:one|1|two|2|three|3|four|4|five|5|\\d+)\\s+${menuNameLower.replace(/\s+/g, '\\s+')}`, 'i');
+            const qtyMatch = summaryMessage.content.match(qtyPattern);
+            
+            if (qtyMatch) {
+              const qtyText = qtyMatch[0].toLowerCase();
+              if (qtyText.includes('two') || qtyText.match(/\b2\b/)) quantity = 2;
+              else if (qtyText.includes('three') || qtyText.match(/\b3\b/)) quantity = 3;
+              else if (qtyText.includes('four') || qtyText.match(/\b4\b/)) quantity = 4;
+              else if (qtyText.includes('five') || qtyText.match(/\b5\b/)) quantity = 5;
+              else {
+                const numMatch = qtyText.match(/\b(\d+)\b/);
+                if (numMatch) quantity = parseInt(numMatch[1]) || 1;
+              }
+            }
+            
+            itemsWithIds.push({
+              menu_item_id: menuItem.id,
+              quantity: quantity
+            });
+            console.log(`✅ Last resort matched "${menuItem.name}" (qty: ${quantity}) from summary`);
+          }
+        }
+      }
+    }
+
     if (itemsWithIds.length === 0) {
       console.error('❌ No items extracted after all attempts');
+      console.error('📝 Conversation history:', JSON.stringify(cleanHistory, null, 2));
+      console.error('📋 Available menu items:', menuItems.map(m => m.name).join(', '));
       return {
         items: [],
         customer_name: orderData?.customer_name || null,
