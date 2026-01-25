@@ -2,6 +2,13 @@
   "version": 2,
   "builds": [
     {
+      "src": "dashboard/package.json",
+      "use": "@vercel/next",
+      "config": {
+        "distDir": ".next"
+      }
+    },
+    {
       "src": "server/index.js",
       "use": "@vercel/node"
     }
@@ -16,11 +23,8 @@
       "dest": "server/index.js"
     },
     {
-      "src": "/",
-      "dest": "server/index.js"
+      "src": "/(.*)",
+      "dest": "dashboard/$1"
     }
-  ],
-  "env": {
-    "NODE_ENV": "production"
-  }
+  ]
 }

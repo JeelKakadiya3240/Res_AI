@@ -33,6 +33,8 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Use environment variable or default to localhost for dev
+  // When deployed, NEXT_PUBLIC_API_URL should be set to the same domain (empty string for relative URLs)
   const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
   const fetchOrders = async () => {
