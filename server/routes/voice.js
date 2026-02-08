@@ -19,7 +19,10 @@ const {
   isCustomerInfoComplete,
   CartStatus 
 } = require('../services/cartState');
+const { isConfigured: isElevenLabsConfigured, generateAndStoreAudio, getAudioBuffer, prewarmCache } = require('../services/elevenlabsTts');
 require('dotenv').config();
+
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || ''; // e.g. https://your-ngrok.ngrok.io - required for ElevenLabs Play
 
 // Optional Twilio setup - only initialize if credentials are provided
 let twilio = null;
@@ -39,6 +42,38 @@ if (accountSid && authToken && accountSid.startsWith('AC') && !accountSid.includ
   }
 } else {
   console.log('ℹ️  Twilio not configured - voice call features will be disabled');
+}
+
+// Prewarm ElevenLabs cache with fixed phrases (greeting, menu response, etc.) so first use = 0ms
+async function prewarmFixedPhrases() {
+  if (!isElevenLabsConfigured() || !PUBLIC_BASE_URL) return;
+  const fixed = [
+    'I am an AI assistant of the restaurant. Tell me what you would like to order.',
+    "I didn't catch that. Could you please repeat?",
+    'Let me check that for you.',
+    'Great! Before I confirm your order, may I have your name, please?',
+    'I apologize, but there was an error processing your order. Please try again or call back.',
+    'I apologize, but I encountered an error. Please try again.'
+  ];
+  try {
+    const menuItems = await getMenuContext();
+    const categories = [...new Set(menuItems.map(item => item.category))];
+    const categoriesText = formatCategoriesForAI(categories);
+    fixed.push(`We have ${categoriesText}. Which category would you like to see?`);
+  } catch (e) {
+    console.warn('[ElevenLabs] Prewarm: could not build menu phrase', e.message);
+  }
+  const n = await prewarmCache(fixed);
+  if (n > 0) console.log(`✅ ElevenLabs prewarmed ${n} fixed phrases (0ms on first use)`);
+}
+
+if (isElevenLabsConfigured()) {
+  if (PUBLIC_BASE_URL) {
+    console.log('✅ ElevenLabs TTS enabled (voice will use ElevenLabs)');
+    prewarmFixedPhrases().catch(err => console.warn('[ElevenLabs] Prewarm failed:', err.message));
+  } else {
+    console.log('ℹ️  ElevenLabs API key set but PUBLIC_BASE_URL missing - using Twilio/Polly. Set PUBLIC_BASE_URL (e.g. ngrok URL) to use ElevenLabs.');
+  }
 }
 
 // Store conversation history (in production, use Redis or database)
@@ -168,29 +203,42 @@ function formatNaturalSpeech(text) {
   </speak>`;
 }
 
-// Helper function to say text with human-like voice
-function sayNatural(twiml, text, options = {}) {
-  // Use Amazon Polly voice for SSML support (prosody rate control)
-  // Built-in Twilio voices (alice, man, woman) do NOT support SSML prosody
-  // Amazon Polly voices (premium, support SSML):
-  // - polly.Joanna (US English, female, neural) - DEFAULT - supports SSML
-  // - polly.Kendra (US English, female, neural)
-  // - polly.Salli (US English, female, standard)
-  const voice = options.voice || 'polly.Joanna'; // Amazon Polly voice with SSML support
-  const language = options.language || 'en-US';
-  
-  // Add a brief pause before speaking to make it feel more natural (like thinking)
-  // This makes the conversation feel less rushed
-  if (options.addPauseBefore !== false) {
-    twiml.pause({ length: 1 }); // 1 second pause before response
+// Serve cached ElevenLabs audio for Twilio <Play> (Twilio fetches this URL)
+router.get('/audio/:token', (req, res) => {
+  const buffer = getAudioBuffer(req.params.token);
+  if (!buffer) {
+    res.status(404).send('Audio not found or expired');
+    return;
   }
-  
-  // Use SSML for more natural speech with pauses and prosody
-  // Note: SSML prosody rate only works with Amazon Polly voices
-  twiml.say({
-    voice: voice,
-    language: language
-  }, formatNaturalSpeech(text));
+  res.set({ 'Content-Type': 'audio/mpeg' });
+  res.send(buffer);
+});
+
+/**
+ * Say text using ElevenLabs (if configured + PUBLIC_BASE_URL) or fallback to Polly.
+ * Async: use await sayNatural(twiml, text, options).
+ */
+async function sayNatural(twiml, text, options = {}) {
+  const useElevenLabs = isElevenLabsConfigured() && PUBLIC_BASE_URL;
+  if (useElevenLabs) {
+    const token = await generateAndStoreAudio(text);
+    if (token) {
+      if (options.addPauseBefore !== false) {
+        twiml.pause({ length: 0.25 }); // 0.25s = snappier, same quality
+      }
+      const audioUrl = `${PUBLIC_BASE_URL.replace(/\/$/, '')}/api/voice/audio/${token}`;
+      twiml.play(audioUrl);
+      return;
+    }
+    console.warn('[Voice] ElevenLabs TTS failed, using Polly fallback');
+  }
+  // Polly path (original behavior)
+  const voice = options.voice || 'polly.Joanna';
+  const language = options.language || 'en-US';
+  if (options.addPauseBefore !== false) {
+    twiml.pause({ length: 0.25 });
+  }
+  twiml.say({ voice, language }, formatNaturalSpeech(text));
 }
 
 // Handle incoming call
@@ -217,7 +265,7 @@ router.post('/incoming-call', async (req, res) => {
   const twiml = new twilio.twiml.VoiceResponse();
   
   // Use natural human-like voice
-  sayNatural(twiml, 'I am an AI assistant of the restaurant. Tell me what you would like to order.');
+  await sayNatural(twiml, 'I am an AI assistant of the restaurant. Tell me what you would like to order.');
   twiml.gather({
     input: 'speech',
     action: '/api/voice/handle-speech',
@@ -258,7 +306,7 @@ router.post('/handle-speech', async (req, res) => {
   console.log(`⏱️  [PERF] Transcription received: ${timings.transcription_received - timings.request_received}ms after request`);
 
   if (!speechResult) {
-    sayNatural(twiml, 'I didn\'t catch that. Could you please repeat?');
+    await sayNatural(twiml, 'I didn\'t catch that. Could you please repeat?');
     twiml.redirect('/api/voice/incoming-call');
     res.type('text/xml');
     return res.send(twiml.toString());
@@ -330,7 +378,7 @@ router.post('/handle-speech', async (req, res) => {
       // Say "Let me check" only for slow AI responses (general_question, angry_complaint, etc.)
       // No pause before "Let me check" - it should be immediate
       const immediateResponseStart = Date.now();
-      sayNatural(twiml, 'Let me check that for you.', { addPauseBefore: false });
+      await sayNatural(twiml, 'Let me check that for you.', { addPauseBefore: false });
       console.log(`⏱️  [PERF] "Let me check" said at: ${immediateResponseStart - overallStart}ms from request start`);
     }
     
@@ -486,7 +534,7 @@ router.post('/handle-speech', async (req, res) => {
         
         saveMessageToDBByCallSidAsync(callSid, 'assistant', response);
         
-        sayNatural(twiml, response);
+        await sayNatural(twiml, response);
         twiml.gather({
           input: 'speech',
           action: '/api/voice/handle-speech',
@@ -503,7 +551,7 @@ router.post('/handle-speech', async (req, res) => {
         
         saveMessageToDBByCallSidAsync(callSid, 'assistant', response);
         
-        sayNatural(twiml, response);
+        await sayNatural(twiml, response);
         twiml.gather({
           input: 'speech',
           action: '/api/voice/handle-speech',
@@ -523,7 +571,7 @@ router.post('/handle-speech', async (req, res) => {
         
         saveMessageToDBByCallSidAsync(callSid, 'assistant', response);
         
-        sayNatural(twiml, response);
+        await sayNatural(twiml, response);
         twiml.gather({
           input: 'speech',
           action: '/api/voice/handle-speech',
@@ -552,7 +600,7 @@ router.post('/handle-speech', async (req, res) => {
         
         saveMessageToDBByCallSidAsync(callSid, 'assistant', response);
         
-        sayNatural(twiml, response);
+        await sayNatural(twiml, response);
         twiml.gather({
           input: 'speech',
           action: '/api/voice/handle-speech',
@@ -572,7 +620,7 @@ router.post('/handle-speech', async (req, res) => {
         
         saveMessageToDBByCallSidAsync(callSid, 'assistant', response);
         
-        sayNatural(twiml, response);
+        await sayNatural(twiml, response);
         twiml.gather({
           input: 'speech',
           action: '/api/voice/handle-speech',
@@ -616,7 +664,7 @@ router.post('/handle-speech', async (req, res) => {
         
         saveMessageToDBByCallSidAsync(callSid, 'assistant', response);
         
-        sayNatural(twiml, response);
+        await sayNatural(twiml, response);
         twiml.gather({
           input: 'speech',
           action: '/api/voice/handle-speech',
@@ -632,7 +680,7 @@ router.post('/handle-speech', async (req, res) => {
         
         saveMessageToDBByCallSidAsync(callSid, 'assistant', response);
         
-        sayNatural(twiml, response);
+        await sayNatural(twiml, response);
         twiml.gather({
           input: 'speech',
           action: '/api/voice/handle-speech',
@@ -651,7 +699,7 @@ router.post('/handle-speech', async (req, res) => {
         
         saveMessageToDBByCallSidAsync(callSid, 'assistant', response);
         
-        sayNatural(twiml, response);
+        await sayNatural(twiml, response);
         twiml.gather({
           input: 'speech',
           action: '/api/voice/handle-speech',
@@ -695,7 +743,7 @@ router.post('/handle-speech', async (req, res) => {
           const response = `Got it, ${lastAssistantMessage.item_name}. Anything else?`;
           conversationHistory.push({ role: 'assistant', content: response, intent: 'order_item_added' });
           saveMessageToDBByCallSidAsync(callSid, 'assistant', response);
-          sayNatural(twiml, response);
+          await sayNatural(twiml, response);
           twiml.gather({
             input: 'speech',
             action: '/api/voice/handle-speech',
@@ -717,7 +765,7 @@ router.post('/handle-speech', async (req, res) => {
         
         saveMessageToDBByCallSidAsync(callSid, 'assistant', errorMessage);
         
-        sayNatural(twiml, errorMessage);
+        await sayNatural(twiml, errorMessage);
         twiml.gather({
           input: 'speech',
           action: '/api/voice/handle-speech',
@@ -757,7 +805,7 @@ router.post('/handle-speech', async (req, res) => {
         
         saveMessageToDBByCallSidAsync(callSid, 'assistant', errorMessage);
         
-        sayNatural(twiml, errorMessage);
+        await sayNatural(twiml, errorMessage);
         twiml.gather({
           input: 'speech',
           action: '/api/voice/handle-speech',
@@ -816,7 +864,7 @@ router.post('/handle-speech', async (req, res) => {
       
       if (orderError || !order) {
         console.error('❌ Order creation error:', orderError);
-        sayNatural(twiml, 'I apologize, but there was an error processing your order. Please try again or call back.');
+        await sayNatural(twiml, 'I apologize, but there was an error processing your order. Please try again or call back.');
       } else {
         console.log('✅ Order created successfully:', order.order_id);
         
@@ -857,7 +905,7 @@ router.post('/handle-speech', async (req, res) => {
         conversationHistory.push(confirmationMessageWithIntent);
         
         // Use natural voice for confirmation
-        sayNatural(twiml, confirmationMessage);
+        await sayNatural(twiml, confirmationMessage);
         
         // Update conversation with order info (non-blocking)
         saveConversationToDBAsync(callSid, {
@@ -897,7 +945,7 @@ router.post('/handle-speech', async (req, res) => {
             
             saveMessageToDBByCallSidAsync(callSid, 'assistant', response);
             
-            sayNatural(twiml, response);
+            await sayNatural(twiml, response);
             twiml.gather({
               input: 'speech',
               action: '/api/voice/handle-speech',
@@ -920,7 +968,7 @@ router.post('/handle-speech', async (req, res) => {
             
             saveMessageToDBByCallSidAsync(callSid, 'assistant', response);
             
-            sayNatural(twiml, response);
+            await sayNatural(twiml, response);
             twiml.gather({
               input: 'speech',
               action: '/api/voice/handle-speech',
@@ -949,7 +997,7 @@ router.post('/handle-speech', async (req, res) => {
         
         saveMessageToDBByCallSidAsync(callSid, 'assistant', response);
         
-        sayNatural(twiml, response);
+        await sayNatural(twiml, response);
         twiml.gather({
           input: 'speech',
           action: '/api/voice/handle-speech',
@@ -997,7 +1045,7 @@ router.post('/handle-speech', async (req, res) => {
         
         saveMessageToDBByCallSidAsync(callSid, 'assistant', response);
         
-        sayNatural(twiml, response);
+        await sayNatural(twiml, response);
         twiml.gather({
           input: 'speech',
           action: '/api/voice/handle-speech',
@@ -1017,7 +1065,7 @@ router.post('/handle-speech', async (req, res) => {
         
         saveMessageToDBByCallSidAsync(callSid, 'assistant', aiResponse);
         
-        sayNatural(twiml, aiResponse);
+        await sayNatural(twiml, aiResponse);
         twiml.gather({
           input: 'speech',
           action: '/api/voice/handle-speech',
@@ -1064,7 +1112,7 @@ router.post('/handle-speech', async (req, res) => {
       });
       
       // Continue conversation with natural voice
-      sayNatural(twiml, aiResponse);
+      await sayNatural(twiml, aiResponse);
       twiml.gather({
         input: 'speech',
         action: '/api/voice/handle-speech',
@@ -1108,7 +1156,7 @@ router.post('/handle-speech', async (req, res) => {
         
         saveMessageToDBByCallSidAsync(callSid, 'assistant', response);
         
-        sayNatural(twiml, response);
+        await sayNatural(twiml, response);
         twiml.gather({
           input: 'speech',
           action: '/api/voice/handle-speech',
@@ -1125,7 +1173,7 @@ router.post('/handle-speech', async (req, res) => {
         
         saveMessageToDBByCallSidAsync(callSid, 'assistant', response);
         
-        sayNatural(twiml, response);
+        await sayNatural(twiml, response);
         twiml.gather({
           input: 'speech',
           action: '/api/voice/handle-speech',
@@ -1145,7 +1193,7 @@ router.post('/handle-speech', async (req, res) => {
         
         saveMessageToDBByCallSidAsync(callSid, 'assistant', response);
         
-        sayNatural(twiml, response);
+        await sayNatural(twiml, response);
         twiml.gather({
           input: 'speech',
           action: '/api/voice/handle-speech',
@@ -1190,7 +1238,7 @@ router.post('/handle-speech', async (req, res) => {
       });
       
       // Continue conversation with natural voice
-      sayNatural(twiml, aiResponse);
+      await sayNatural(twiml, aiResponse);
       twiml.gather({
         input: 'speech',
         action: '/api/voice/handle-speech',
@@ -1208,13 +1256,14 @@ router.post('/handle-speech', async (req, res) => {
     console.log(`   Database operations: ${timings.db_operations - (timings.transcription_received || timings.request_received)}ms`);
     console.log(`   Intent detection: ${timings.intent_detection ? timings.intent_detection - (timings.db_operations || timings.request_received) : 'N/A'}ms`);
     console.log(`   AI response: ${timings.ai_response ? timings.ai_response - (timings.intent_detection || timings.db_operations || timings.request_received) : 'N/A'}ms`);
+    console.log(`   (TTS: see "ElevenLabs TTS" line above for voice generation time)`);
     console.log(`   ⏱️  TOTAL TIME: ${timings.total - timings.request_received}ms\n`);
     
   } catch (error) {
     console.error('Voice handler error:', error);
     timings.total = Date.now();
     console.log(`\n❌ [PERF SUMMARY] Error occurred after ${timings.total - timings.request_received}ms\n`);
-    sayNatural(twiml, 'I apologize, but I encountered an error. Please try again.');
+    await sayNatural(twiml, 'I apologize, but I encountered an error. Please try again.');
     twiml.gather({
       input: 'speech',
       action: '/api/voice/handle-speech',

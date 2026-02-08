@@ -146,58 +146,32 @@ function formatMenuForAI(menuItems) {
 async function detectIntent(query, conversationHistory = []) {
   const intentStart = Date.now();
   try {
-    const intentPrompt = `Analyze the user's message and determine their intent. Consider the conversation context carefully.
+    // Shorter prompt = fewer tokens = faster response
+    const intentPrompt = `Classify intent. Return ONLY JSON: {"intent":"...","confidence":0.0-1.0}
+Intents: menu_inquiry, category_inquiry, item_inquiry, order_item, confirm_order, provide_info, general_question, order_status, angry_complaint
+- order_item: "I want X", "order X", or "yes" when last AI said "order it?" or "like to order"
+- confirm_order: "yes"/"correct" only when last AI said "Is that correct?" or "So your order is"
+- general_question: "No" to "Anything else?", or other
+- provide_info: name or phone
 
-Return ONLY a JSON object with this structure:
-{
-  "intent": "menu_inquiry" | "category_inquiry" | "item_inquiry" | "order_item" | "confirm_order" | "provide_info" | "general_question" | "order_status" | "angry_complaint",
-  "confidence": 0.0-1.0
-}
+Last messages:
+${conversationHistory.slice(-2).map(m => `${m.role}: ${m.content}`).join('\n')}
 
-Intent meanings:
-- "menu_inquiry": User wants to know what's on the menu (e.g., "what's on the menu", "show me menu", "what categories do you have")
-- "category_inquiry": User wants to know items in a specific category (e.g., "what do you have in beverages?", "what's in lunch?", "show me soft drinks")
-- "item_inquiry": User is asking about a specific item - either checking if it exists (e.g., "do you have coffee?", "is coffee available?", "do you serve pizza?") OR asking for details about it (e.g., "what's in coffee?", "tell me about burger", "what are the ingredients in pizza?")
-- "order_item": User wants to add an item to their order (e.g., "I want vegetable samosa", "order butter chicken", "vegetable samosa", "yes" when AI just asked "Would you like to order it?")
-- "provide_info": User is providing their name or phone number (e.g., "My name is John", "John Doe", "My number is 1234567890", "It's 555-1234")
-- "confirm_order": User wants to confirm/place their order. ONLY use this if:
-  * AI just asked "Is that correct?" or "correct?" AND user says "yes", "correct", "right", "sure", "okay", "yeah"
-  * AI just asked "So your order is: [items]. Is that correct?" AND user says "yes"
-  * User explicitly says "confirm order", "place order", "yes confirm"
-  * DO NOT use for "Yes" when AI asks "Would you like to order it?" - that's order_item
-  * DO NOT use for "No" when AI asks "Anything else?" - that's general_question
-- "order_status": User wants to know their order ID or order status (e.g., "what's my order ID")
-- "angry_complaint": User is angry, frustrated, or complaining (e.g., "this is terrible", "I'm so angry", "this is ridiculous", "I hate this")
-- "general_question": General questions, "No" to "Anything else?", or other responses
-
-CRITICAL RULES - ORDER FLOW:
-1. When AI asks "Anything else?" and user says "No" → intent = general_question (AI should summarize order)
-2. When AI asks "Is that correct?" or "So your order is: [items]. Is that correct?" and user says "Yes" → intent = confirm_order (create order)
-3. When AI asks "Anything else?" and user says "Yes" → intent = order_item (they want to add more)
-4. When AI asks "Would you like to order it?" and user says "Yes" → intent = order_item (they want to add the item to cart)
-5. "No" when AI asks "correct?" = confirm_order (means "No changes, confirm it")
-
-User message: "${query}"
-
-Recent conversation context:
-${conversationHistory.slice(-3).map(m => `${m.role}: ${m.content}`).join('\n')}
-
-Return ONLY valid JSON, no other text.`;
+User: "${query}"
+JSON only:`;
 
     const messages = [
       { role: 'system', content: intentPrompt },
-      ...conversationHistory.slice(-3), // Last 3 messages for context
+      ...conversationHistory.slice(-2),
       { role: 'user', content: query }
     ];
 
     const apiStart = Date.now();
-    // OPTIMIZATION: Use gpt-3.5-turbo for intent detection - much faster (~200-400ms vs 1700ms)
-    // gpt-3.5-turbo is sufficient for intent classification and is 4-5x faster
     const completion = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo', // Changed from gpt-4-turbo-preview for speed
+      model: 'gpt-3.5-turbo',
       messages: messages,
-      temperature: 0.3,
-      max_tokens: 100,
+      temperature: 0.2,
+      max_tokens: 50,
       response_format: { type: 'json_object' }
     });
     const apiEnd = Date.now();
